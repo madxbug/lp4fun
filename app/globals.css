@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+    .text-balance {
+        text-wrap: balance;
+    }
+}
+
+:root:not([data-theme]) .theme-controller {
+    display: none;
+}
+
+.bg-light-green {
+    background-color: #e6ffe6; /* Very light green for light mode */
+}
+
+.hover-light-green:hover {
+    background-color: #d1ffd1; /* Slightly darker on hover for light mode */
+}
+
+[data-theme="dark"] .bg-light-green {
+    background-color: #133926; /* Darker, more muted green for dark mode */
+}
+
+[data-theme="dark"] .hover-light-green:hover {
+    background-color: #1a4a32; /* Slightly lighter on hover for dark mode */
+}
