@@ -1,5 +1,6 @@
 // app/api/historical-price/route.ts
 import {NextRequest, NextResponse} from 'next/server';
+import {fetchWithRetry} from "@/app/utils/utils";
 
 const BASE_URL = 'https://public-api.birdeye.so/defi/history_price';
 const REQUIRED_PARAMS = ['address', 'address_type', 'type', 'time_from', 'time_to'];
@@ -34,12 +35,12 @@ function buildUrl(params: Record<string, string>): string {
 }
 
 async function fetchData(url: string): Promise<any> {
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(() => fetch(url, {
         headers: {
             'x-chain': 'solana',
             'x-api-key': process.env.BIRDEYE_API_KEY || ''
         }
-    });
+    }));
 
     if (!response.ok) {
         throw new FetchError(`HTTP error! status: ${response.status}`);

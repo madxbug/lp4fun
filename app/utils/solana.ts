@@ -6,6 +6,7 @@ import {getMint} from "@solana/spl-token";
 import {PositionLiquidityData, PositionTransaction, TimeInterval, TokenInfo, TotalLiquidity} from "@/app/types";
 import Decimal from "decimal.js";
 import {determineIntervalIndex, determineOptimalTimeInterval, getHistoricalPrice} from "@/app/utils/birdeye";
+import {fetchWithRetry} from "@/app/utils/utils";
 
 const BASIS_POINT_MAX = 10000;
 
@@ -142,7 +143,7 @@ function updateWeightedPrice(currentPrice: Decimal, currentTotalValue: Decimal, 
 }
 
 async function fetchTokenDecimals(connection: Connection, mint: PublicKey): Promise<number> {
-    const mintInfo = await getMint(connection, mint);
+    const mintInfo = await fetchWithRetry(() => getMint(connection, mint));
     return mintInfo.decimals;
 }
 
@@ -156,8 +157,8 @@ export async function fetchAndParseTransactions(positionPubKeys: string[]): Prom
 
     for (const positionPubKey of positionPubKeys) {
         const address = new PublicKey(positionPubKey);
-        const {lbPair, owner} = await program.account.positionV2.fetch(address);
-        const {activeId, binStep, tokenXMint, tokenYMint} = await program.account.lbPair.fetch(lbPair);
+        const { lbPair, owner } = await fetchWithRetry(() => program.account.positionV2.fetch(address));
+        const {activeId, binStep, tokenXMint, tokenYMint} = await fetchWithRetry(() => program.account.lbPair.fetch(lbPair));
 
         const tokenXDecimals = await fetchTokenDecimals(connection, tokenXMint);
         const tokenYDecimals = await fetchTokenDecimals(connection, tokenYMint);
@@ -174,10 +175,10 @@ export async function fetchAndParseTransactions(positionPubKeys: string[]): Prom
         const BATCH_SIZE = 1000;
 
         while (true) {
-            const signatureInfos = await connection.getSignaturesForAddress(address, {
+            const signatureInfos = await fetchWithRetry(() => connection.getSignaturesForAddress(address, {
                 limit: BATCH_SIZE,
                 before: lastSignature
-            });
+            }));
 
             if (signatureInfos.length === 0) break;
 
@@ -207,7 +208,7 @@ export async function fetchAndParseTransactions(positionPubKeys: string[]): Prom
         for (let i = allSignatures.length - 1; i >= 0; i -= BATCH_SIZE) {
             const startIndex = Math.max(0, i - BATCH_SIZE + 1);
             const batchSignatures = allSignatures.slice(startIndex, i + 1);
-            const transactions = await connection.getParsedTransactions(batchSignatures.map(s => s.signature), {maxSupportedTransactionVersion: 0});
+            const transactions = await fetchWithRetry(() => connection.getParsedTransactions(batchSignatures.map(s => s.signature), {maxSupportedTransactionVersion: 0}));
 
             for (let j = transactions.length - 1; j >= 0; j--) {
                 const tx = transactions[j];
@@ -229,7 +230,7 @@ export async function fetchAndParseTransactions(positionPubKeys: string[]): Prom
             }
         }
 
-        const dlmm = await DLMM.create(connection, lbPair);
+        const dlmm = await fetchWithRetry(() => DLMM.create(connection, lbPair));
         const {userPositions} = await dlmm.getPositionsByUserAndLbPair(owner);
         const currentPrice = getPriceFromBinId(activeId, binStep, tokenXDecimals, tokenYDecimals);
         const positionInfo = userPositions.find(obj => obj.publicKey.equals(address));

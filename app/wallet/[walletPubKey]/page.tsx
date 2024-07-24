@@ -9,11 +9,12 @@ import {Connection, PublicKey} from '@solana/web3.js';
 import {fetchTokenPrice, formatTokenBalance} from "@/app/utils/solana";
 import {PoolData, PositionData} from "@/app/types";
 import {bnToDate} from "@/app/utils/numberFormatting";
+import {fetchWithRetry} from "@/app/utils/utils";
 
 const createDataMap = async (wallet: string): Promise<Map<string, PoolData>> => {
     const connection = new Connection("https://rpc-proxy.segfaultx0.workers.dev/");
     const user = new PublicKey(wallet);
-    const positions = await DLMM.getAllLbPairPositionsByUser(connection, user);
+    const positions = await fetchWithRetry(() => DLMM.getAllLbPairPositionsByUser(connection, user));
     const map = new Map<string, PoolData>();
 
     await Promise.all(Array.from(positions.entries()).map(async ([key, position]) => {
