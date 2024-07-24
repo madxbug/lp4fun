@@ -263,8 +263,16 @@ export async function fetchAndParseTransactions(positionPubKeys: string[]): Prom
             const time_from = Math.floor(fromDate.getTime() / 1000);  // FIXME: save blocktime instead of date, and use blocktime directly
             const time_to = Math.floor(toDate.getTime() / 1000);
             const historicalPrices = await getHistoricalPrice(lbPair.toString(), 'pair', optimalTimeInterval, time_from, time_to);
+
+            const maxAvailableIndex = historicalPrices.data.items.length - 1;
+
             for (const transaction of claimFeeTransactions) {
-                const price = historicalPrices.data.items[transaction.index];
+                let priceIndex = Math.min(transaction.index, maxAvailableIndex);
+                const price = historicalPrices.data.items[priceIndex];
+                if (!price) {
+                    console.error('Price not found for index:', priceIndex);
+                    continue;
+                }
                 const value = new Decimal(transaction.tokenXChange).mul(price.value).add(new Decimal(transaction.tokenYChange));
 
                 totalClaimedFees.tokenX += transaction.tokenXChange;
