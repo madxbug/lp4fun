@@ -93,8 +93,24 @@ const WalletPage: React.FC = () => {
         return <div className="alert alert-error">{error}</div>;
     }
 
-    if (!dataMap) {
-        return <div className="alert alert-info">No data available for this wallet.</div>;
+    if (!dataMap || dataMap.size === 0) {
+        return (
+            <div className="flex flex-col items-center justify-center h-screen text-center">
+                <div className="text-2xl font-bold mb-4">No open DLMM positions found</div>
+                <div className="text-lg mb-6">Looks like you haven&apos;t dipped your toes in the DLMM pool yet!</div>
+                <div className="text-md">
+                    Ready to dive in? Open a position at{' '}
+                    <a
+                        href="https://app.meteora.ag/dlmm"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-500 hover:text-blue-700 underline"
+                    >
+                        Meteora DLMM
+                    </a>
+                </div>
+            </div>
+        );
     }
 
     return (
