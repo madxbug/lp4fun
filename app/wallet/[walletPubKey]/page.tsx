@@ -11,7 +11,7 @@ import {PoolData, PositionData} from "@/app/types";
 import {bnToDate} from "@/app/utils/numberFormatting";
 
 const createDataMap = async (wallet: string): Promise<Map<string, PoolData>> => {
-    const connection = new Connection("https://nola-trqgof-fast-mainnet.helius-rpc.com");
+    const connection = new Connection("https://rpc-proxy.segfaultx0.workers.dev/");
     const user = new PublicKey(wallet);
     const positions = await DLMM.getAllLbPairPositionsByUser(connection, user);
     const map = new Map<string, PoolData>();

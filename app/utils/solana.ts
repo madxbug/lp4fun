@@ -148,7 +148,7 @@ async function fetchTokenDecimals(connection: Connection, mint: PublicKey): Prom
 
 
 export async function fetchAndParseTransactions(positionPubKeys: string[]): Promise<{ [key: string]: PositionLiquidityData }> {
-    const connection = new Connection("https://nola-trqgof-fast-mainnet.helius-rpc.com");
+    const connection = new Connection("https://rpc-proxy.segfaultx0.workers.dev");
     const provider = new AnchorProvider(connection, {} as any, AnchorProvider.defaultOptions());
     const program = new Program(IDL, LBCLMM_PROGRAM_IDS["mainnet-beta"], provider);
 
