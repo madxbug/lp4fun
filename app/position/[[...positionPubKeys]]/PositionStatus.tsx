@@ -1,46 +1,52 @@
 // app/position/[[...positionPubKeys]]/PositionStatus.tsx
 import React, {useCallback, useEffect, useMemo, useState} from 'react';
-import {fetchAndParseTransactions, fetchTokenPrice} from '@/app/utils/solana';
+import {blockTime2Date} from '@/app/utils/solana';
 import {formatDistanceToNow} from "date-fns";
-import {PositionLiquidityData, PositionTransaction} from "@/app/types";
+import {EventInfo, EventType, PositionLiquidityData} from "@/app/types";
 import {prettifyNumber} from "@/app/utils/numberFormatting";
+import {Connection, PublicKey} from '@solana/web3.js';
+import {fetchTokenPrice} from "@/app/utils/jup";
+import {getPositionsInfo} from "@/app/utils/dlmm";
+import { config } from '@/app/utils/config';
 import Decimal from "decimal.js";
-import {PublicKey} from '@solana/web3.js';
 
 interface PositionStatusProps {
     positionPubKeys: string[];
 }
 
-const getEventColor = (operation: string): string => {
+const getEventColor = (operation: string | undefined): string => {
     const colors = {
         'AddLiquidity': 'bg-success bg-opacity-20 border-success text-success-content',
         'RemoveLiquidity': 'bg-error bg-opacity-20 border-error text-error-content',
-        'Claim Fee': 'bg-warning bg-opacity-20 border-warning text-warning-content',
-        'Position Close': 'bg-neutral bg-opacity-20 border-neutral text-neutral-content',
-        'Position Create': 'bg-info bg-opacity-20 border-info text-info-content',
+        'ClaimFee': 'bg-warning bg-opacity-20 border-warning text-warning-content',
+        'PositionClose': 'bg-neutral bg-opacity-20 border-neutral text-neutral-content',
+        'PositionCreate': 'bg-info bg-opacity-20 border-info text-info-content',
     };
     return colors[operation as keyof typeof colors] || 'bg-base-200 border-base-300 text-base-content';
 };
 
-const getEventIcon = (operation: string): string => {
+const getEventIcon = (operation: string | undefined): string => {
     const icons = {
         'AddLiquidity': '➕',
         'RemoveLiquidity': '➖',
-        'Claim Fee': '💰',
-        'Position Close': '🔒',
-        'Position Create': '🆕',
+        'ClaimFee': '💰',
+        'PositionClose': '🔒',
+        'PositionCreate': '🆕',
     };
     return icons[operation as keyof typeof icons] || '❓';
 };
 
-const getEventDescription = (tx: PositionTransaction): string => {
-    switch (tx.operation) {
-        case 'AddLiquidity':
-        case 'RemoveLiquidity':
-        case 'Claim Fee':
-            return `${prettifyNumber(tx.tokenXChange)} ${tx.tokenXSymbol} + ${prettifyNumber(tx.tokenYChange)} ${tx.tokenYSymbol}`;
-        case 'Position Close':
-        case 'Position Create':
+const getEventDescription = (eventInfo: Partial<EventInfo> | undefined, tokenXSymbol: string, tokenYSymbol: string): string => {
+    if (eventInfo === undefined) {
+        return 'Unknown operation';
+    }
+    switch (eventInfo.operation) {
+        case EventType.AddLiquidity:
+        case EventType.RemoveLiquidity:
+        case EventType.ClaimFee:
+            return `${prettifyNumber(eventInfo.tokenXChange)} ${tokenXSymbol} + ${prettifyNumber(eventInfo.tokenYChange)} ${tokenYSymbol}`;
+        case EventType.PositionClose:
+        case EventType.PositionCreate:
             return '';
         default:
             return 'Unknown operation';
@@ -64,7 +70,10 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
         setError(null);
 
         try {
-            const newPositionsData = await fetchAndParseTransactions(positionPubKeys);
+            const connection = new Connection(config.RPC_ENDPOINT, {
+                disableRetryOnRateLimit: true,
+            });
+            const newPositionsData = await getPositionsInfo(connection, positionPubKeys);
             setPositionsData(newPositionsData);
         } catch (err) {
             setError('Failed to fetch transactions. Please try again later.');
@@ -143,22 +152,22 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
     const calculateMetrics = useCallback((positions: { [key: string]: PositionLiquidityData }, currency?: string) => {
         return Object.values(positions).reduce((acc, position) => {
             const convertedDeposits = currency
-                ? convertValue(position.totalDeposits.totalValue, position.tokenYSymbol, currency)
-                : position.totalDeposits.totalValue;
+                ? convertValue(position.totalDeposits.totalValueInTokenY, position.tokenYSymbol, currency)
+                : position.totalDeposits.totalValueInTokenY;
             const convertedCurrent = currency
                 ? convertValue(
-                    position.totalCurrent.totalValue.plus(position.totalUnclaimedFees.totalValue),
+                    position.totalCurrent.totalValueInTokenY.plus(position.totalUnclaimedFees.totalValueInTokenY),
                     position.tokenYSymbol,
                     currency
                 )
-                : position.totalCurrent.totalValue.plus(position.totalUnclaimedFees.totalValue);
+                : position.totalCurrent.totalValueInTokenY.plus(position.totalUnclaimedFees.totalValueInTokenY);
             const convertedWithdrawn = currency
                 ? convertValue(
-                    position.totalWithdrawals.totalValue.plus(position.totalClaimedFees.totalValue),
+                    position.totalWithdrawals.totalValueInTokenY.plus(position.totalClaimedFees.totalValueInTokenY),
                     position.tokenYSymbol,
                     currency
                 )
-                : position.totalWithdrawals.totalValue.plus(position.totalClaimedFees.totalValue);
+                : position.totalWithdrawals.totalValueInTokenY.plus(position.totalClaimedFees.totalValueInTokenY);
 
             acc.totalInvested = acc.totalInvested.plus(convertedDeposits);
             acc.currentValue = acc.currentValue.plus(convertedCurrent);
@@ -248,10 +257,11 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
         );
     }
 
-    // Group positions by token pair
-    const groupedPositions: {
-        [key: string]: { [key: string]: PositionLiquidityData }
-    } = Object.entries(positionsData).reduce((acc, [pubKey, data]) => {
+    const sortedPositions = Object.entries(positionsData).sort((a, b) =>
+        b[1].lastUpdatedAt.getTime() - a[1].lastUpdatedAt.getTime()
+    );
+
+    const groupedPositions = sortedPositions.reduce((acc, [pubKey, data]) => {
         const pairKey = `${data.tokenXSymbol}-${data.tokenYSymbol}`;
         if (!acc[pairKey]) {
             acc[pairKey] = {};
@@ -268,7 +278,7 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
 
             {Object.entries(groupedPositions).map(([pairKey, positions]) => {
                 const groupMetrics = calculateMetrics(positions);
-                const [tokenXSymbol, tokenYSymbol] = pairKey.split('-');
+                const [, tokenYSymbol] = pairKey.split('-');
                 return (
                     <div key={pairKey} className="mb-12 border border-base-200 rounded-lg shadow-sm overflow-hidden">
                         {renderSummary(groupMetrics, `${pairKey}`, tokenYSymbol)}
@@ -287,11 +297,11 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                             {/* Individual Positions (Hidden by default) */}
                             {showPositions[pairKey] && (
                                 <div className="bg-base-100 border-t border-base-200">
-                                    {Object.entries(positions).map(([pubKey, positionData], index) => {
+                                    {Object.entries(positions).map(([pubKey, positionData]) => {
 
                                         if (!positionData) return null;
                                         const {
-                                            transactions,
+                                            operations,
                                             tokenXSymbol,
                                             tokenYSymbol,
                                             startDate,
@@ -309,21 +319,21 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                 includeSeconds: true
                                             });
                                         };
-                                        const getTotalInvestment = () => prettifyNumber(totalDeposits.totalValue);
-                                        const getTotalWithdrawn = () => prettifyNumber(totalWithdrawals.totalValue.plus(totalClaimedFees.totalValue));
-                                        const getCurrentValue = () => prettifyNumber(totalCurrent.totalValue.plus(totalUnclaimedFees.totalValue));
+                                        const getTotalInvestment = () => prettifyNumber(totalDeposits.totalValueInTokenY);
+                                        const getTotalWithdrawn = () => prettifyNumber(totalWithdrawals.totalValueInTokenY.plus(totalClaimedFees.totalValueInTokenY));
+                                        const getCurrentValue = () => prettifyNumber(totalCurrent.totalValueInTokenY.plus(totalUnclaimedFees.totalValueInTokenY));
                                         const getNetProfit = () => {
-                                            const profit = totalCurrent.totalValue.plus(totalUnclaimedFees.totalValue)
-                                                .plus(totalWithdrawals.totalValue)
-                                                .plus(totalClaimedFees.totalValue)
-                                                .minus(totalDeposits.totalValue);
+                                            const profit = totalCurrent.totalValueInTokenY.plus(totalUnclaimedFees.totalValueInTokenY)
+                                                .plus(totalWithdrawals.totalValueInTokenY)
+                                                .plus(totalClaimedFees.totalValueInTokenY)
+                                                .minus(totalDeposits.totalValueInTokenY);
                                             return prettifyNumber(profit);
                                         };
                                         const getROI = () => {
-                                            const roi = totalCurrent.totalValue.plus(totalUnclaimedFees.totalValue)
-                                                .plus(totalWithdrawals.totalValue)
-                                                .plus(totalClaimedFees.totalValue)
-                                                .div(totalDeposits.totalValue)
+                                            const roi = totalCurrent.totalValueInTokenY.plus(totalUnclaimedFees.totalValueInTokenY)
+                                                .plus(totalWithdrawals.totalValueInTokenY)
+                                                .plus(totalClaimedFees.totalValueInTokenY)
+                                                .div(totalDeposits.totalValueInTokenY)
                                                 .minus(1)
                                                 .mul(100);
                                             return prettifyNumber(roi);
@@ -435,35 +445,35 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                             <tbody>
                                                             <tr>
                                                                 <td>Price ({tokenYSymbol} per {tokenXSymbol})</td>
-                                                                <td>{prettifyNumber(totalDeposits.price)}</td>
-                                                                <td>{prettifyNumber(totalWithdrawals.price)}</td>
-                                                                <td>{prettifyNumber(totalClaimedFees.price)}</td>
-                                                                <td>{prettifyNumber(totalUnclaimedFees.price)}</td>
-                                                                <td>{prettifyNumber(totalCurrent.price)}</td>
+                                                                <td>{prettifyNumber(totalDeposits.exchangeRate)}</td>
+                                                                <td>{prettifyNumber(totalWithdrawals.exchangeRate)}</td>
+                                                                <td>{prettifyNumber(totalClaimedFees.exchangeRate)}</td>
+                                                                <td>{prettifyNumber(totalUnclaimedFees.exchangeRate)}</td>
+                                                                <td>{prettifyNumber(totalCurrent.exchangeRate)}</td>
                                                             </tr>
                                                             <tr>
                                                                 <td>Amount {tokenXSymbol}</td>
-                                                                <td>{prettifyNumber(totalDeposits.tokenX)}</td>
-                                                                <td>{prettifyNumber(totalWithdrawals.tokenX)}</td>
-                                                                <td>{prettifyNumber(totalClaimedFees.tokenX)}</td>
-                                                                <td>{prettifyNumber(totalUnclaimedFees.tokenX)}</td>
-                                                                <td>{prettifyNumber(totalCurrent.tokenX)}</td>
+                                                                <td>{prettifyNumber(totalDeposits.tokenXBalance)}</td>
+                                                                <td>{prettifyNumber(totalWithdrawals.tokenXBalance)}</td>
+                                                                <td>{prettifyNumber(totalClaimedFees.tokenXBalance)}</td>
+                                                                <td>{prettifyNumber(totalUnclaimedFees.tokenXBalance)}</td>
+                                                                <td>{prettifyNumber(totalCurrent.tokenXBalance)}</td>
                                                             </tr>
                                                             <tr>
                                                                 <td>Amount {tokenYSymbol}</td>
-                                                                <td>{prettifyNumber(totalDeposits.tokenY)}</td>
-                                                                <td>{prettifyNumber(totalWithdrawals.tokenY)}</td>
-                                                                <td>{prettifyNumber(totalClaimedFees.tokenY)}</td>
-                                                                <td>{prettifyNumber(totalUnclaimedFees.tokenY)}</td>
-                                                                <td>{prettifyNumber(totalCurrent.tokenY)}</td>
+                                                                <td>{prettifyNumber(totalDeposits.tokenYBalance)}</td>
+                                                                <td>{prettifyNumber(totalWithdrawals.tokenYBalance)}</td>
+                                                                <td>{prettifyNumber(totalClaimedFees.tokenYBalance)}</td>
+                                                                <td>{prettifyNumber(totalUnclaimedFees.tokenYBalance)}</td>
+                                                                <td>{prettifyNumber(totalCurrent.tokenYBalance)}</td>
                                                             </tr>
                                                             <tr>
                                                                 <td>Value in {tokenYSymbol}</td>
-                                                                <td>{prettifyNumber(totalDeposits.totalValue)}</td>
-                                                                <td>{prettifyNumber(totalWithdrawals.totalValue)}</td>
-                                                                <td>{prettifyNumber(totalClaimedFees.totalValue)}</td>
-                                                                <td>{prettifyNumber(totalUnclaimedFees.totalValue)}</td>
-                                                                <td>{prettifyNumber(totalCurrent.totalValue)}</td>
+                                                                <td>{prettifyNumber(totalDeposits.totalValueInTokenY)}</td>
+                                                                <td>{prettifyNumber(totalWithdrawals.totalValueInTokenY)}</td>
+                                                                <td>{prettifyNumber(totalClaimedFees.totalValueInTokenY)}</td>
+                                                                <td>{prettifyNumber(totalUnclaimedFees.totalValueInTokenY)}</td>
+                                                                <td>{prettifyNumber(totalCurrent.totalValueInTokenY)}</td>
                                                             </tr>
                                                             </tbody>
                                                         </table>
@@ -476,19 +486,21 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                         <h3 className="text-base font-semibold mb-3 text-base-content">Position
                                                             Operations</h3>
                                                         <div className="space-y-2">
-                                                            {transactions.map((tx, index) => (
+                                                            {operations.slice().reverse().map((event, index) => (
                                                                 <div key={index}
-                                                                     className={`flex items-center p-2 rounded border ${getEventColor(tx.operation)}`}>
-                                                                    <a href={`https://solscan.io/tx/${tx.signature}`}
-                                                                       className="text-2xl mr-3">
-                                                                        <div>{getEventIcon(tx.operation)}</div>
+                                                                     className={`flex items-center p-2 rounded border ${getEventColor(event.operation)}`}>
+                                                                    <a href={`https://solscan.io/tx/${event.signature}`}
+                                                                       className="text-2xl mr-3"
+                                                                       target="_blank"
+                                                                       rel="noopener noreferrer">
+                                                                        <div>{getEventIcon(event.operation)}</div>
                                                                     </a>
                                                                     <div className="flex-grow">
-                                                                        <p className="font-semibold">{tx.operation}</p>
-                                                                        <p className="text-sm opacity-70">{getEventDescription(tx)}</p>
+                                                                        <p className="font-semibold">{event.operation}</p>
+                                                                        <p className="text-sm opacity-70">{getEventDescription(event, tokenXSymbol, tokenYSymbol)}</p>
                                                                     </div>
                                                                     <div className="text-xs opacity-50">
-                                                                        {formatDistanceToNow(new Date(tx.date), {
+                                                                        {formatDistanceToNow(blockTime2Date(event.blockTime), {
                                                                             addSuffix: true,
                                                                             includeSeconds: true
                                                                         })}

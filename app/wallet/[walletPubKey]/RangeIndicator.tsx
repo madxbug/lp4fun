@@ -3,7 +3,7 @@ import React from 'react';
 import {Tooltip} from 'react-tooltip';
 import 'react-tooltip/dist/react-tooltip.css';
 import {useTheme} from '../../contexts/ThemeContext';
-import {getPriceFromBinId} from "@/app/utils/solana";
+import {getPriceFromBinId} from "@/app/utils/dlmm";
 
 interface RangeIndicatorProps {
     position: { lowerBinId: number; upperBinId: number };
@@ -23,7 +23,7 @@ const RangeIndicator: React.FC<RangeIndicatorProps> = ({position, activeBin, bin
         const indicatorClass = "absolute top-1/2 h-4 w-1 rounded-full transform -translate-y-1/2";
 
         let indicatorColor = "bg-green-500";
-        let indicatorPosition = "50%";
+        let indicatorPosition: string;
 
         if (activeBin < lowerBinId) {
             indicatorColor = "bg-red-500";

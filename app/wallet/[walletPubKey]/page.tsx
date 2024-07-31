@@ -6,13 +6,15 @@ import React, {useEffect, useState} from 'react';
 import TableComponent from '@/app/wallet/[walletPubKey]/TableComponent';
 import DLMM, {LbPosition} from '@meteora-ag/dlmm';
 import {Connection, PublicKey} from '@solana/web3.js';
-import {fetchTokenPrice, formatTokenBalance} from "@/app/utils/solana";
+import {formatTokenBalance} from "@/app/utils/solana";
 import {PoolData, PositionData} from "@/app/types";
 import {bnToDate} from "@/app/utils/numberFormatting";
-import {fetchWithRetry} from "@/app/utils/utils";
+import {fetchWithRetry} from "@/app/utils/rateLimitedFetch";
+import {fetchTokenPrice} from "@/app/utils/jup";
+import {config} from "@/app/utils/config";
 
 const createDataMap = async (wallet: string): Promise<Map<string, PoolData>> => {
-    const connection = new Connection("https://rpc-proxy.segfaultx0.workers.dev/");
+    const connection = new Connection(config.RPC_ENDPOINT);
     const user = new PublicKey(wallet);
     const positions = await fetchWithRetry(() => DLMM.getAllLbPairPositionsByUser(connection, user));
     const map = new Map<string, PoolData>();

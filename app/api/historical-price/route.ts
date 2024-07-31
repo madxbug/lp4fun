@@ -1,6 +1,6 @@
 // app/api/historical-price/route.ts
 import {NextRequest, NextResponse} from 'next/server';
-import {fetchWithRetry} from "@/app/utils/utils";
+import {fetchWithRetry} from "@/app/utils/rateLimitedFetch";
 
 const BASE_URL = 'https://public-api.birdeye.so/defi/history_price';
 const REQUIRED_PARAMS = ['address', 'address_type', 'type', 'time_from', 'time_to'];

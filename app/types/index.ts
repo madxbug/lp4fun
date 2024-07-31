@@ -28,24 +28,6 @@ export interface PoolData {
     tokenYDecimal: number;
 }
 
-export interface PositionTransaction {
-    signature: string;
-    date: Date;
-    tokenXSymbol: string;
-    tokenYSymbol: string;
-    operation: PositionOperationType;
-    tokenXChange: number;
-    tokenYChange: number;
-    activeBin: number;
-}
-
-export type PositionOperationType =
-    | 'AddLiquidity'
-    | 'RemoveLiquidity'
-    | 'Claim Fee'
-    | 'Position Close'
-    | 'Position Create'
-    | 'Unknown Operation';
 
 export interface TokenInfo {
     nameX: string;
@@ -104,17 +86,60 @@ export type TimeInterval =
 
 export type AddressType = 'pair' | 'token';
 
+export enum EventType {
+    AddLiquidity = 'AddLiquidity',
+    RemoveLiquidity = 'RemoveLiquidity',
+    ClaimFee = 'ClaimFee',
+    PositionClose = 'PositionClose',
+    PositionCreate = 'PositionCreate'
+}
+
+export interface EventInfo {
+    operation: EventType;
+    signature: string;
+    blockTime: number;
+    lbPair: PublicKey;
+    position: PublicKey;
+    owner: PublicKey;
+    tokenXChange: Decimal;
+    tokenYChange: Decimal;
+    activeBin: number;
+}
+
+export class BalanceInfo {
+    tokenXBalance: Decimal;
+    tokenYBalance: Decimal;
+    exchangeRate: Decimal;
+    totalValueInTokenY: Decimal;
+
+    constructor(tokenXBalance: Decimal, tokenYBalance: Decimal, exchangeRate: Decimal, totalValueInTokenY?: Decimal) {
+        this.tokenXBalance = tokenXBalance;
+        this.tokenYBalance = tokenYBalance;
+        this.exchangeRate = exchangeRate;
+        if (totalValueInTokenY == undefined) {
+            this.totalValueInTokenY = this.exchangeRate.mul(this.tokenXBalance).add(this.tokenYBalance);
+        } else {
+            this.totalValueInTokenY = totalValueInTokenY;
+        }
+    }
+
+    static zero(): BalanceInfo {
+        return new BalanceInfo(new Decimal(0), new Decimal(0), new Decimal(0), new Decimal(0));
+    }
+}
+
 export interface PositionLiquidityData {
-    lbPair: PublicKey,
-    transactions: PositionTransaction[];
+    lbPair: PublicKey;
+    operations: Partial<EventInfo>[];
     tokenXSymbol: string;
-    tokenXMint: PublicKey,
+    tokenXMint: PublicKey;
     tokenYSymbol: string;
-    tokenYMint: PublicKey,
-    startDate: Date | null;
-    totalDeposits: TotalLiquidity;
-    totalWithdrawals: TotalLiquidity;
-    totalUnclaimedFees: TotalLiquidity;
-    totalClaimedFees: TotalLiquidity;
-    totalCurrent: TotalLiquidity;
+    tokenYMint: PublicKey;
+    startDate: Date;
+    lastUpdatedAt: Date;
+    totalDeposits: BalanceInfo;
+    totalWithdrawals: BalanceInfo;
+    totalUnclaimedFees: BalanceInfo;
+    totalClaimedFees: BalanceInfo;
+    totalCurrent: BalanceInfo;
 }
