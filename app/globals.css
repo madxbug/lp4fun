@@ -27,3 +27,14 @@
 [data-theme="dark"] .hover-light-green:hover {
     background-color: #1a4a32; /* Slightly lighter on hover for dark mode */
 }
+
+@keyframes heartbeat {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.2); }
+    100% { transform: scale(1); }
+}
+
+.beating-heart {
+    display: inline-block;
+    animation: heartbeat 1s infinite;
+}

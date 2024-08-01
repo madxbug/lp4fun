@@ -19,7 +19,7 @@ const getEventColor = (operation: string | undefined): string => {
         'AddLiquidity': 'bg-success bg-opacity-20 border-success text-success-content',
         'RemoveLiquidity': 'bg-error bg-opacity-20 border-error text-error-content',
         'ClaimFee': 'bg-warning bg-opacity-20 border-warning text-warning-content',
-        'PositionClose': 'bg-neutral bg-opacity-20 border-neutral text-neutral-content',
+        'PositionClose': 'bg-neutral bg-opacity-50 border border-neutral text-neutral-content',
         'PositionCreate': 'bg-info bg-opacity-20 border-info text-info-content',
     };
     return colors[operation as keyof typeof colors] || 'bg-base-200 border-base-300 text-base-content';
@@ -445,11 +445,11 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                             <tbody>
                                                             <tr>
                                                                 <td>Price ({tokenYSymbol} per {tokenXSymbol})</td>
-                                                                <td>{prettifyNumber(totalDeposits.exchangeRate)}</td>
-                                                                <td>{prettifyNumber(totalWithdrawals.exchangeRate)}</td>
-                                                                <td>{prettifyNumber(totalClaimedFees.exchangeRate)}</td>
-                                                                <td>{prettifyNumber(totalUnclaimedFees.exchangeRate)}</td>
-                                                                <td>{prettifyNumber(totalCurrent.exchangeRate)}</td>
+                                                                <td>{totalDeposits.exchangeRate.isZero() ? '🪙' : prettifyNumber(totalDeposits.exchangeRate)}</td>
+                                                                <td>{totalWithdrawals.exchangeRate.isZero() ? '🪙' : prettifyNumber(totalWithdrawals.exchangeRate)}</td>
+                                                                <td>{totalClaimedFees.exchangeRate.isZero() ? '🪙' : prettifyNumber(totalClaimedFees.exchangeRate)}</td>
+                                                                <td>{totalUnclaimedFees.exchangeRate.isZero() ? '🪙' : prettifyNumber(totalUnclaimedFees.exchangeRate)}</td>
+                                                                <td>{totalCurrent.exchangeRate.isZero() ? '🪙' : prettifyNumber(totalCurrent.exchangeRate)}</td>
                                                             </tr>
                                                             <tr>
                                                                 <td>Amount {tokenXSymbol}</td>
