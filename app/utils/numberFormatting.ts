@@ -19,13 +19,68 @@ export function prettifyNumber(num: number | string | Decimal | undefined, isPer
     const n = num instanceof Decimal ? num : new Decimal(num);
 
     if (n.isNaN()) return 'N/A';
+    if (n.isZero()) return '0';
+    const absN = n.abs();
 
-    if (n.lessThan(1) && n.greaterThan(0)) return n.toFixed(6);
-    if (n.lessThan(100)) return n.toFixed(2);
-    if (n.lessThan(1000)) return n.toFixed(1);
-    if (n.lessThan(1000000)) return n.toNumber().toLocaleString('en-US', {maximumFractionDigits: 0});
-    if (n.lessThan(1000000000)) return n.dividedBy(1000000).toFixed(1) + 'M';
-    return n.dividedBy(1000000000).toFixed(1) + 'B';
+    // Unicode subscript digits
+    const subscripts = ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉'];
+
+    // Function to format very small numbers with zero count
+    const formatSmallNumber = (num: Decimal): string => {
+        if (num.isZero()) return '0';
+
+        let e = num.e;
+        let m = num.d.join('').substring(0, 5);  // Up to 5 significant digits
+
+        // Count leading zeros
+        let zeroCount = -e - 1;  // Subtract 1 to account for the first significant digit
+        zeroCount = Math.max(zeroCount, 0);  // Ensure zeroCount is not negative
+
+        // Convert zero count to subscript
+        const subscriptZeros = zeroCount.toString().split('').map(digit => subscripts[parseInt(digit)]).join('');
+
+        // Format the number
+        const sign = num.isNegative() ? '-' : '';
+        return `${sign}$0.0${subscriptZeros}${m}`;
+    };
+
+    // Very small numbers
+    if (absN.lessThan('0.000001')) {
+        return formatSmallNumber(n);
+    }
+
+    // Numbers between 0.000001 and 0.001
+    if (absN.lessThan('0.001')) {
+        return n.toFixed(6);
+    }
+
+    // Numbers between 0.001 and 1
+    if (absN.lessThan(1)) {
+        return n.toFixed(4);
+    }
+
+    // Numbers between 1 and 100
+    if (absN.lessThan(100)) {
+        return n.toFixed(2);
+    }
+
+    // Numbers between 100 and 1,000
+    if (absN.lessThan(1000)) {
+        return n.toFixed(1);
+    }
+
+    // Numbers between 1,000 and 1,000,000
+    if (absN.lessThan(1000000)) {
+        return n.toNumber().toLocaleString('en-US', {maximumFractionDigits: 0});
+    }
+
+    // Numbers between 1,000,000 and 1,000,000,000 (Millions)
+    if (absN.lessThan(1000000000)) {
+        return (n.dividedBy(1000000).toNumber()).toLocaleString('en-US', {maximumFractionDigits: 1}) + 'M';
+    }
+
+    // Numbers 1,000,000,000 and above (Billions)
+    return (n.dividedBy(1000000000).toNumber()).toLocaleString('en-US', {maximumFractionDigits: 1}) + 'B';
 }
 
 export function formatCurrency(value: number | string | Decimal): string {

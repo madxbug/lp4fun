@@ -1,7 +1,7 @@
 import {Connection, ParsedTransactionWithMeta, PublicKey} from "@solana/web3.js";
 import {AnchorProvider, Program, utils} from "@coral-xyz/anchor";
 import DLMM, {IDL, LBCLMM_PROGRAM_IDS} from "@meteora-ag/dlmm";
-import {BalanceInfo, EventInfo, EventType, PositionLiquidityData} from "@/app/types";
+import {BalanceInfo, EventInfo, EventType, PositionLiquidityData, TokenInfo} from "@/app/types";
 import {fetchTokenPrice} from "@/app/utils/jup";
 import {fetchWithRetry} from "@/app/utils/rateLimitedFetch";
 import {
@@ -12,6 +12,7 @@ import {
 } from "@/app/utils/solana";
 import {config} from "@/app/utils/config";
 import Decimal from "decimal.js";
+import {determineIntervalIndex, determineOptimalTimeInterval, getHistoricalPrice} from "@/app/utils/birdeye";
 
 const BASIS_POINT_MAX = 10000;
 
@@ -184,31 +185,12 @@ function calculateWeightedPrice(
     return currentPrice.mul(currentWeight).plus(newPrice.mul(newWeight));
 }
 
-function updateBalance(balance: BalanceInfo,
-                       event: Partial<EventInfo>,
-                       binStep: number, tokenXDecimals: number, tokenYDecimals: number): void {
-    if (event.tokenXChange === undefined || event.tokenYChange === undefined || event.activeBin === undefined) {
-        console.error('Invalid event data:', event);
-        return;
-    }
-
-    const tokenXBalance = balance.tokenXBalance;
-    const newExchangeRate = getPriceFromBinId(event.activeBin, binStep, tokenXDecimals, tokenYDecimals);
-    const valueChange = newExchangeRate.mul(event.tokenXChange).add(event.tokenYChange);
-    balance.tokenXBalance = balance.tokenXBalance.add(event.tokenXChange);
-    balance.tokenYBalance = balance.tokenYBalance.add(event.tokenYChange);
-    balance.exchangeRate = calculateWeightedPrice(balance.exchangeRate, tokenXBalance, newExchangeRate, event.tokenXChange);
-    balance.totalValueInTokenY = balance.totalValueInTokenY.add(valueChange);
-}
-
 function calculateBalanceChange(events: Partial<EventInfo>[], binStep: number, tokenXDecimals: number, tokenYDecimals: number): {
     totalDeposits: BalanceInfo,
     totalWithdrawals: BalanceInfo,
-    totalClaimedFees: BalanceInfo
 } {
     const totalDeposits = BalanceInfo.zero();
     const totalWithdrawals = BalanceInfo.zero();
-    const totalClaimedFees = BalanceInfo.zero();
 
     for (const event of events) {
         switch (event.operation) {
@@ -218,16 +200,9 @@ function calculateBalanceChange(events: Partial<EventInfo>[], binStep: number, t
             case EventType.RemoveLiquidity:
                 updateBalance(totalWithdrawals, event, binStep, tokenXDecimals, tokenYDecimals);
                 break;
-            case EventType.ClaimFee:
-                if (event.tokenXChange !== undefined && event.tokenYChange !== undefined) {
-                    totalClaimedFees.tokenXBalance = totalClaimedFees.tokenXBalance.add(event.tokenXChange);
-                    totalClaimedFees.tokenYBalance = totalClaimedFees.tokenYBalance.add(event.tokenYChange);
-                }
-                break;
         }
     }
-
-    return {totalDeposits, totalWithdrawals, totalClaimedFees};
+    return {totalDeposits, totalWithdrawals};
 }
 
 export async function getPositionsInfo(connection: Connection,
@@ -282,9 +257,10 @@ export async function getPositionsInfo(connection: Connection,
 
             const {
                 totalDeposits,
-                totalWithdrawals,
-                totalClaimedFees
+                totalWithdrawals
             } = calculateBalanceChange(events, binStep, tokenXDecimals, tokenYDecimals);
+
+            const totalClaimedFees = await calculateClaimedFees(positionCreateEvent.lbPair, events, tokenInfo);
 
             positionsData[positionPubKey] = {
                 lbPair: positionCreateEvent.lbPair,
@@ -309,4 +285,64 @@ export async function getPositionsInfo(connection: Connection,
     await Promise.all(Object.entries(sessionEvents).map(([positionPubKey, events]) => processPosition(positionPubKey, events)));
 
     return positionsData;
+}
+
+function updateBalanceWithEvent(balance: BalanceInfo, event: Partial<EventInfo>, price: Decimal): void {
+    const tokenXChange = new Decimal(event.tokenXChange || 0);
+    const tokenYChange = new Decimal(event.tokenYChange || 0);
+    const valueChange = price.mul(tokenXChange).add(tokenYChange);
+
+    balance.tokenXBalance = balance.tokenXBalance.add(tokenXChange);
+    balance.tokenYBalance = balance.tokenYBalance.add(tokenYChange);
+    balance.exchangeRate = calculateWeightedPrice(balance.exchangeRate, balance.totalValueInTokenY, price, valueChange);
+    balance.totalValueInTokenY = balance.totalValueInTokenY.add(valueChange);
+}
+
+function updateBalance(balance: BalanceInfo, event: Partial<EventInfo>, binStep: number, tokenXDecimals: number, tokenYDecimals: number): void {
+    if (event.tokenXChange === undefined || event.tokenYChange === undefined || event.activeBin === undefined) {
+        console.error('Invalid event data:', event);
+        return;
+    }
+
+    const newExchangeRate = getPriceFromBinId(event.activeBin, binStep, tokenXDecimals, tokenYDecimals);
+    updateBalanceWithEvent(balance, event, newExchangeRate);
+}
+
+async function calculateClaimedFees(lbPair: PublicKey, events: Partial<EventInfo>[], tokenInfo: TokenInfo): Promise<BalanceInfo> {
+    const totalClaimedFees = BalanceInfo.zero();
+    const claimFeeEvents = events.filter(tx => tx.operation === EventType.ClaimFee);
+    if (claimFeeEvents.length === 0) {
+        return totalClaimedFees;
+    }
+
+    const fromBlockTime = claimFeeEvents[0].blockTime || 0;
+    const toBlockTime = claimFeeEvents[claimFeeEvents.length - 1].blockTime || 0;
+    const optimalTimeInterval = determineOptimalTimeInterval(fromBlockTime, toBlockTime);
+
+    const indexedClaimFeeTransactions = claimFeeEvents.map(event => ({
+        ...event,
+        index: determineIntervalIndex(fromBlockTime, optimalTimeInterval, event.blockTime || 0)
+    }));
+
+    try {
+        const historicalPrices = await getHistoricalPrice(lbPair.toString(), 'pair', optimalTimeInterval, fromBlockTime, toBlockTime);
+        const maxAvailableIndex = historicalPrices.data.items.length - 1;
+
+        for (const event of indexedClaimFeeTransactions) {
+            const priceIndex = Math.min(event.index, maxAvailableIndex);
+            const price = historicalPrices.data.items[priceIndex];
+            if (price) {
+                updateBalanceWithEvent(totalClaimedFees, event, new Decimal(price.value));
+            }
+        }
+    } catch (error) {
+        console.error('Error fetching historical prices:', error);
+        console.info('Using current JUP price:', tokenInfo.price);
+        // TODO here it is possible to use TWAP based on previous events with activeBin and tokenInfo.price as latest price
+        for (const event of claimFeeEvents) {
+            updateBalanceWithEvent(totalClaimedFees, event, new Decimal(tokenInfo.price));
+        }
+    }
+
+    return totalClaimedFees;
 }

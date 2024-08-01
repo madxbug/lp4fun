@@ -2,6 +2,7 @@
 import {AddressType, HistoricalPriceData, TimeInterval} from "@/app/types";
 
 const MAX_DATA_POINTS = 999;
+const MS_PER_MINUTE = 60000;
 
 export async function getHistoricalPrice(
     address: string,
@@ -16,6 +17,9 @@ export async function getHistoricalPrice(
         to take 45m-price minus 30m-price divided by 2, like average, or gmean,
         check which method is better and more accurate statistically
      */
+    if (toBlockTime - fromBlockTime < MS_PER_MINUTE) {
+        toBlockTime += MS_PER_MINUTE;
+    }
     const params = new URLSearchParams({
         address,
         address_type: addressType,
@@ -38,8 +42,8 @@ export async function getHistoricalPrice(
     }
 }
 
-export function determineOptimalTimeInterval(fromDate: Date, toDate: Date): TimeInterval {
-    const totalDurationMinutes = (toDate.getTime() - fromDate.getTime()) / (60 * 1000);
+export function determineOptimalTimeInterval(fromBlockTime: number, toBlockTime: number): TimeInterval {
+    const totalDurationMinutes = (toBlockTime - fromBlockTime) / (60 * 1000);
     const targetIntervalMinutes = Math.ceil(totalDurationMinutes / MAX_DATA_POINTS);
 
     const availableIntervals: [number, TimeInterval][] = [
@@ -57,9 +61,9 @@ export function determineOptimalTimeInterval(fromDate: Date, toDate: Date): Time
     return '1M';
 }
 
-export function determineIntervalIndex(fromTime: Date, interval: TimeInterval, targetTime: Date): number {
+export function determineIntervalIndex(initBlockTime: number, interval: TimeInterval, targetBlockTime: number): number {
     const intervalMs = convertIntervalToMs(interval);
-    const timeDifference = targetTime.getTime() - fromTime.getTime();
+    const timeDifference = targetBlockTime - initBlockTime;
     const index = Math.floor(timeDifference / intervalMs);
     return Math.max(0, index);
 }
@@ -68,7 +72,6 @@ function convertIntervalToMs(interval: TimeInterval): number {
     const [value, unit] = interval.match(/(\d+)(\w+)/)?.slice(1) || [];
     const numericValue = parseInt(value, 10);
 
-    const MS_PER_MINUTE = 60000;
     const MS_PER_HOUR = 3600000;
     const MS_PER_DAY = 86400000;
 
