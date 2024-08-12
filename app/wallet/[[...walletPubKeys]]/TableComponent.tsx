@@ -1,9 +1,8 @@
-// app/wallet/[walletPubKey]/TableComponent.tsx
+// app/wallet/[[...walletPubKeys]]/TableComponent.tsx
 'use client';
 
 import React, {useEffect, useState} from 'react';
 import RangeIndicator from "./RangeIndicator";
-import {FaChartBar, FaTimes} from 'react-icons/fa';
 import Image from 'next/image';
 import {formatDistanceToNow} from 'date-fns';
 import {PoolData, PoolInfo, PositionData} from "@/app/types";
@@ -12,6 +11,8 @@ import {calculateLiquidityDistribution} from "@/app/utils/liquidity";
 
 interface TableComponentProps {
     dataMap: Map<string, PoolData>;
+    selectedPositions: Set<string>;
+    onSelectionChange: (positions: Set<string>) => void;
 }
 
 interface GroupedPool {
@@ -28,12 +29,16 @@ interface TokenGroup {
     }[];
 }
 
-const TableComponent: React.FC<TableComponentProps> = ({dataMap}) => {
+const TableComponent: React.FC<TableComponentProps> = ({ dataMap, selectedPositions, onSelectionChange }) => {
     const [poolInfoMap, setPoolInfoMap] = useState<Map<string, PoolInfo>>(new Map());
     const [positionsWithDates, setPositionsWithDates] = useState<Map<string, PositionData[]>>(new Map());
     const [groupedPools, setGroupedPools] = useState<TokenGroup[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [selectedPositions, setSelectedPositions] = useState<Set<string>>(new Set());
+    const [localSelectedPositions, setLocalSelectedPositions] = useState<Set<string>>(new Set());
+
+    useEffect(() => {
+        setLocalSelectedPositions(new Set(selectedPositions));
+    }, [selectedPositions]);
 
     useEffect(() => {
         const fetchPoolInfo = async (pubkey: string, xDecimals: number, yDecimals: number) => {
@@ -127,48 +132,25 @@ const TableComponent: React.FC<TableComponentProps> = ({dataMap}) => {
     }, [dataMap]);
 
     const togglePositionSelection = (positionKey: string) => {
-        setSelectedPositions(prev => {
-            const newSet = new Set(prev);
-            if (newSet.has(positionKey)) {
-                newSet.delete(positionKey);
-            } else {
-                newSet.add(positionKey);
-            }
-            return newSet;
-        });
+        const newSelection = new Set(selectedPositions);
+        if (newSelection.has(positionKey)) {
+            newSelection.delete(positionKey);
+        } else {
+            newSelection.add(positionKey);
+        }
+        onSelectionChange(newSelection);
     };
-
-    const clearSelection = () => {
-        setSelectedPositions(new Set());
-    };
-
-    const openSelectedPositions = () => {
-        const positionKeys = Array.from(selectedPositions);
-        const url = `/position/${positionKeys.join(',')}`;
-        window.open(url, '_blank');
-    };
-
-    if (isLoading) {
-        return (
-            <div className="flex justify-center items-center h-64">
-                <span className="loading loading-spinner loading-lg"></span>
-            </div>
-        );
-    }
 
     const toggleGroupSelection = (groupPositions: string[]) => {
-        setSelectedPositions(prev => {
-            const newSet = new Set(prev);
-            const allSelected = groupPositions.every(pos => newSet.has(pos));
+        const newSelection = new Set(selectedPositions);
+        const allSelected = groupPositions.every(pos => newSelection.has(pos));
 
-            if (allSelected) {
-                groupPositions.forEach(pos => newSet.delete(pos));
-            } else {
-                groupPositions.forEach(pos => newSet.add(pos));
-            }
-
-            return newSet;
-        });
+        if (allSelected) {
+            groupPositions.forEach(pos => newSelection.delete(pos));
+        } else {
+            groupPositions.forEach(pos => newSelection.add(pos));
+        }
+        onSelectionChange(newSelection);
     };
 
     const isGroupSelected = (groupPositions: string[]) => {
@@ -327,7 +309,7 @@ const TableComponent: React.FC<TableComponentProps> = ({dataMap}) => {
                                                                     <tr
                                                                         key={`${key}-${index}`}
                                                                         className={`border-b last:border-b-0 cursor-pointer transition-colors duration-200
-            ${selectedPositions.has(position.publicKey.toString())
+                                                                        ${selectedPositions.has(position.publicKey.toString())
                                                                             ? 'bg-light-green'
                                                                             : 'hover-light-green'
                                                                         }`}
@@ -383,7 +365,7 @@ const TableComponent: React.FC<TableComponentProps> = ({dataMap}) => {
                                                                 <div
                                                                     key={`${key}-${index}`}
                                                                     className={`shadow rounded-lg p-4 text-xs cursor-pointer transition-all duration-200
-            ${selectedPositions.has(position.publicKey.toString())
+                                                                    ${selectedPositions.has(position.publicKey.toString())
                                                                         ? 'bg-light-green ring-2 ring-green-300'
                                                                         : 'hover-light-green'
                                                                     }
@@ -453,25 +435,17 @@ const TableComponent: React.FC<TableComponentProps> = ({dataMap}) => {
         });
     };
 
+    if (isLoading) {
+        return (
+            <div className="flex justify-center items-center h-64">
+                <span className="loading loading-spinner loading-lg"></span>
+            </div>
+        );
+    }
+
     return (
         <div className="p-4">
             {createTableRows()}
-            {selectedPositions.size > 0 && (
-                <div className="fixed bottom-4 right-4 flex space-x-2">
-                    <button
-                        onClick={() => setSelectedPositions(new Set())}
-                        className="btn btn-circle btn-error"
-                    >
-                        <FaTimes/>
-                    </button>
-                    <button
-                        onClick={openSelectedPositions}
-                        className="btn btn-circle btn-primary"
-                    >
-                        <FaChartBar/>
-                    </button>
-                </div>
-            )}
         </div>
     );
 };

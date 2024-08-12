@@ -9,6 +9,7 @@ import {fetchTokenPrice} from "@/app/utils/jup";
 import {getPositionsInfo} from "@/app/utils/dlmm";
 import { config } from '@/app/utils/config';
 import Decimal from "decimal.js";
+import {formatPubKey} from "@/app/utils/formatters";
 
 interface PositionStatusProps {
     positionPubKeys: string[];
@@ -301,6 +302,7 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
 
                                         if (!positionData) return null;
                                         const {
+                                            owner,
                                             operations,
                                             tokenXSymbol,
                                             tokenYSymbol,
@@ -345,8 +347,35 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                 <div
                                                     className="absolute left-0 top-0 bottom-0 w-1 bg-base-300 opacity-50"></div>
 
-                                                <h3 className="text-lg font-semibold mb-4 text-base-content">Position: {pubKey}</h3>
-
+                                                <h3 className="text-lg font-semibold mb-6 text-base-content">
+                                                    <div
+                                                        className="flex flex-col sm:flex-row sm:items-center space-y-2 sm:space-y-0 sm:space-x-4">
+                                                        <div className="flex items-center space-x-2">
+                                                            <span className="text-base-content/70">Position:</span>
+                                                            <a
+                                                                href={`https://solscan.io/account/${pubKey}`}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                className="font-mono hover:underline"
+                                                            >
+                                                                {formatPubKey(pubKey)}
+                                                            </a>
+                                                        </div>
+                                                        <div
+                                                            className="hidden sm:block w-px h-6 bg-base-content/20"></div>
+                                                        <div className="flex items-center space-x-2">
+                                                            <span className="text-base-content/70">Wallet:</span>
+                                                            <a
+                                                                href={`https://solscan.io/account/${owner}`}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                className="font-mono hover:underline"
+                                                            >
+                                                                {formatPubKey(owner)}
+                                                            </a>
+                                                        </div>
+                                                    </div>
+                                                </h3>
                                                 {/* Summary Section */}
                                                 <div className="bg-base-100 rounded-lg p-4 shadow-sm mb-4">
                                                     <h4 className="text-base font-medium mb-3 text-base-content">Summary</h4>

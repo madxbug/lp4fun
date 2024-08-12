@@ -1,4 +1,4 @@
-// app/wallet/[walletPubKey]/RangeIndicator.tsx
+// app/wallet/[[...walletPubKeys]]/RangeIndicator.tsx
 import React from 'react';
 import {Tooltip} from 'react-tooltip';
 import 'react-tooltip/dist/react-tooltip.css';

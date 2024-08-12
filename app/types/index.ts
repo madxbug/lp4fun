@@ -129,6 +129,7 @@ export class BalanceInfo {
 }
 
 export interface PositionLiquidityData {
+    owner: PublicKey
     lbPair: PublicKey;
     operations: Partial<EventInfo>[];
     tokenXSymbol: string;
@@ -142,4 +143,9 @@ export interface PositionLiquidityData {
     totalUnclaimedFees: BalanceInfo;
     totalClaimedFees: BalanceInfo;
     totalCurrent: BalanceInfo;
+}
+
+export interface WalletData {
+    wallet: string;
+    dataMap: Map<string, PoolData>;
 }

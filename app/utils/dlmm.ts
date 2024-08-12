@@ -263,6 +263,7 @@ export async function getPositionsInfo(connection: Connection,
             const totalClaimedFees = await calculateClaimedFees(positionCreateEvent.lbPair, events, tokenInfo);
 
             positionsData[positionPubKey] = {
+                owner: positionCreateEvent.owner,
                 lbPair: positionCreateEvent.lbPair,
                 operations: events,
                 tokenXSymbol: tokenInfo.nameX,
