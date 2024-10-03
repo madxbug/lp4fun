@@ -2,7 +2,7 @@
 import {AddressType, HistoricalPriceData, TimeInterval} from "@/app/types";
 
 const MAX_DATA_POINTS = 999;
-const MS_PER_MINUTE = 60000;
+const SECONDS_PER_MINUTE = 60;
 
 export async function getHistoricalPrice(
     address: string,
@@ -17,8 +17,8 @@ export async function getHistoricalPrice(
         to take 45m-price minus 30m-price divided by 2, like average, or gmean,
         check which method is better and more accurate statistically
      */
-    if (toBlockTime - fromBlockTime < MS_PER_MINUTE) {
-        toBlockTime += MS_PER_MINUTE;
+    if (toBlockTime - fromBlockTime < SECONDS_PER_MINUTE) {
+        toBlockTime += SECONDS_PER_MINUTE;
     }
     const params = new URLSearchParams({
         address,
@@ -43,7 +43,7 @@ export async function getHistoricalPrice(
 }
 
 export function determineOptimalTimeInterval(fromBlockTime: number, toBlockTime: number): TimeInterval {
-    const totalDurationMinutes = (toBlockTime - fromBlockTime) / (60 * 1000);
+    const totalDurationMinutes = (toBlockTime - fromBlockTime) / SECONDS_PER_MINUTE;
     const targetIntervalMinutes = Math.ceil(totalDurationMinutes / MAX_DATA_POINTS);
 
     const availableIntervals: [number, TimeInterval][] = [
@@ -62,30 +62,30 @@ export function determineOptimalTimeInterval(fromBlockTime: number, toBlockTime:
 }
 
 export function determineIntervalIndex(initBlockTime: number, interval: TimeInterval, targetBlockTime: number): number {
-    const intervalMs = convertIntervalToMs(interval);
+    const intervalSeconds = convertIntervalToSeconds(interval);
     const timeDifference = targetBlockTime - initBlockTime;
-    const index = Math.floor(timeDifference / intervalMs);
+    const index = Math.floor(timeDifference / intervalSeconds);
     return Math.max(0, index);
 }
 
-function convertIntervalToMs(interval: TimeInterval): number {
+function convertIntervalToSeconds(interval: TimeInterval): number {
     const [value, unit] = interval.match(/(\d+)(\w+)/)?.slice(1) || [];
     const numericValue = parseInt(value, 10);
 
-    const MS_PER_HOUR = 3600000;
-    const MS_PER_DAY = 86400000;
+    const SECONDS_PER_HOUR = 3600;
+    const SECONDS_PER_DAY = 86400;
 
     switch (unit) {
         case 'm':
-            return numericValue * MS_PER_MINUTE;
+            return numericValue * SECONDS_PER_MINUTE;
         case 'H':
-            return numericValue * MS_PER_HOUR;
+            return numericValue * SECONDS_PER_HOUR;
         case 'D':
-            return numericValue * MS_PER_DAY;
+            return numericValue * SECONDS_PER_DAY;
         case 'W':
-            return numericValue * 7 * MS_PER_DAY;
+            return numericValue * 7 * SECONDS_PER_DAY;
         case 'M':
-            return numericValue * 30 * MS_PER_DAY; // Approximation
+            return numericValue * 30 * SECONDS_PER_DAY; // Approximation
         default:
             throw new Error(`Invalid interval: ${interval}`);
     }
