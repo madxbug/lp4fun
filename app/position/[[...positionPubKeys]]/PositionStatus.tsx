@@ -1,15 +1,36 @@
 // app/position/[[...positionPubKeys]]/PositionStatus.tsx
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useState, useRef} from 'react';
 import {blockTime2Date} from '@/app/utils/solana';
 import {formatDistanceToNow} from "date-fns";
-import {EventInfo, EventType, PositionLiquidityData} from "@/app/types";
+import {EventInfo, EventType, PositionLiquidityData, MetricsType} from "@/app/types";
 import {prettifyNumber} from "@/app/utils/numberFormatting";
-import {Connection, PublicKey} from '@solana/web3.js';
-import {fetchTokenPrice} from "@/app/utils/jup";
+import {Connection} from '@solana/web3.js';
 import {getPositionsInfo} from "@/app/utils/dlmm";
 import { config } from '@/app/utils/config';
 import Decimal from "decimal.js";
 import {formatPubKey} from "@/app/utils/formatters";
+
+
+const DEFAULT_CURRENCY = "Default";
+
+type TokenSymbol = typeof DEFAULT_CURRENCY | 'SOL' | string;
+
+const BASE_TOKENS: Record<TokenSymbol, string> = {
+    [DEFAULT_CURRENCY]: 'xxx',
+    'SOL': 'So11111111111111111111111111111111111111112'
+} as const;
+
+type MetricsResult = {
+    totalInvested: Decimal;
+    currentValue: Decimal;
+    totalWithdrawn: Decimal;
+    startDate: Date | null;
+};
+
+interface MetricsState {
+    overall: MetricsResult | null;
+    grouped: Record<string, MetricsResult>;
+}
 
 interface PositionStatusProps {
     positionPubKeys: string[];
@@ -58,13 +79,13 @@ const getEventDescription = (eventInfo: Partial<EventInfo> | undefined, tokenXSy
 const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
     const [positionsData, setPositionsData] = useState<{ [key: string]: PositionLiquidityData }>({});
     const [isLoading, setIsLoading] = useState(true);
-    const [isPriceLoading, setIsPriceLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [showDetails, setShowDetails] = useState<{ [key: string]: boolean }>({});
     const [showOperations, setShowOperations] = useState<{ [key: string]: boolean }>({});
     const [showPositions, setShowPositions] = useState<{ [key: string]: boolean }>({});
-    const [selectedCurrency, setSelectedCurrency] = useState('SOL');
-    const [tokenPrices, setTokenPrices] = useState<{ [key: string]: { [key: string]: number } }>({});
+    const [selectedCurrency, setSelectedCurrency] = useState(DEFAULT_CURRENCY);
+    const calculateCallCount = useRef(0);
+    const [availableCurrencies, setAvailableCurrencies] = useState<Record<string, string>>({});
 
     const fetchTransactions = useCallback(async () => {
         setIsLoading(true);
@@ -87,88 +108,40 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
         fetchTransactions();
     }, [fetchTransactions]);
 
-    const availableCurrencies = useMemo(() => {
-        const baseTokens: Record<string, PublicKey> = {
-            'SOL': new PublicKey('So11111111111111111111111111111111111111112'),
-            'USDC': new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'),
-        };
-        const additionalTokens = Object.values(positionsData).reduce((acc, position) => {
-            acc[position.tokenXSymbol] = new PublicKey(position.tokenXMint);
-            acc[position.tokenYSymbol] = new PublicKey(position.tokenYMint);
-            return acc;
-        }, {} as Record<string, PublicKey>);
-        return {...baseTokens, ...additionalTokens};
-    }, [positionsData]);
-
-    const fetchAllTokenPrices = useCallback(async () => {
-        setIsPriceLoading(true);
-        const currencies = Object.keys(availableCurrencies);
-        const newPrices: { [key: string]: { [key: string]: number } } = {};
-
-        for (let i = 0; i < currencies.length; i++) {
-            for (let j = 0; j < currencies.length; j++) {
-                if (i !== j) {
-                    const fromCurrency = currencies[i];
-                    const toCurrency = currencies[j];
-                    try {
-                        const tokenInfo = await fetchTokenPrice(availableCurrencies[fromCurrency], availableCurrencies[toCurrency]);
-                        if (!newPrices[fromCurrency]) newPrices[fromCurrency] = {};
-                        newPrices[fromCurrency][toCurrency] = tokenInfo.price;
-                    } catch (error) {
-                        console.error(`Failed to fetch price for ${fromCurrency} to ${toCurrency}:`, error);
-                        // Instead of skipping, we'll set a default value or retry
-                        if (!newPrices[fromCurrency]) newPrices[fromCurrency] = {};
-                        newPrices[fromCurrency][toCurrency] = 1; // Default to 1:1 rate if fetch fails
-                    }
-                }
+    const additionalTokens = useMemo(() => {
+        const tokens: Record<string, string> = {};
+        for (const position of Object.values(positionsData)) {
+            if (!BASE_TOKENS[position.tokenXSymbol] && !tokens[position.tokenXSymbol]) {
+                tokens[position.tokenXSymbol] = position.tokenXMint.toString();
+            }
+            if (!BASE_TOKENS[position.tokenYSymbol] && !tokens[position.tokenYSymbol]) {
+                tokens[position.tokenYSymbol] = position.tokenYMint.toString();
             }
         }
+        return tokens;
+    }, [positionsData]);
 
-        setTokenPrices(newPrices);
-        setIsPriceLoading(false);
-    }, [availableCurrencies]);
-
-    useEffect(() => {
-        if (Object.keys(positionsData).length > 0) {
-            fetchAllTokenPrices();
-        }
-    }, [positionsData, fetchAllTokenPrices]);
+    const allCurrencies = useMemo(() => ({
+        ...BASE_TOKENS,
+        ...additionalTokens
+    }), [additionalTokens]);
 
     useEffect(() => {
-        // Set up an interval to refresh prices every 5 minutes
-        const intervalId = setInterval(fetchAllTokenPrices, 5 * 60 * 1000);
-        return () => clearInterval(intervalId);
-    }, [fetchAllTokenPrices]);
-
-    const convertValue = useCallback((value: Decimal, fromCurrency: string, toCurrency: string): Decimal => {
-        if (fromCurrency === toCurrency) return value;
-        const rate = tokenPrices[fromCurrency]?.[toCurrency];
-        if (rate === undefined) {
-            console.warn(`No conversion rate found for ${fromCurrency} to ${toCurrency}`);
-            return value; // Return original value if no conversion rate is available
+        if (Object.keys(additionalTokens).length === 1) {
+            const [additionalTokenSymbol, additionalTokenMint] = Object.entries(additionalTokens)[0];
+            setAvailableCurrencies({ ...BASE_TOKENS, [additionalTokenSymbol]: additionalTokenMint });
+        } else {
+            setAvailableCurrencies(BASE_TOKENS);
         }
-        return value.mul(new Decimal(rate));
-    }, [tokenPrices]);
+    }, [additionalTokens]);
 
-    const calculateMetrics = useCallback((positions: { [key: string]: PositionLiquidityData }, currency?: string) => {
+    const calculateMetrics = useCallback((positions: { [key: string]: PositionLiquidityData }, currency: string) => {
+        calculateCallCount.current += 1;
+        console.log(`calculateMetrics called ${calculateCallCount.current} times. Currency: ${currency}`);
         return Object.values(positions).reduce((acc, position) => {
-            const convertedDeposits = currency
-                ? convertValue(position.totalDeposits.totalValueInTokenY, position.tokenYSymbol, currency)
-                : position.totalDeposits.totalValueInTokenY;
-            const convertedCurrent = currency
-                ? convertValue(
-                    position.totalCurrent.totalValueInTokenY.plus(position.totalUnclaimedFees.totalValueInTokenY),
-                    position.tokenYSymbol,
-                    currency
-                )
-                : position.totalCurrent.totalValueInTokenY.plus(position.totalUnclaimedFees.totalValueInTokenY);
-            const convertedWithdrawn = currency
-                ? convertValue(
-                    position.totalWithdrawals.totalValueInTokenY.plus(position.totalClaimedFees.totalValueInTokenY),
-                    position.tokenYSymbol,
-                    currency
-                )
-                : position.totalWithdrawals.totalValueInTokenY.plus(position.totalClaimedFees.totalValueInTokenY);
+            const convertedDeposits = position.totalDeposits.getTotalValueIn(currency);
+            const convertedCurrent = position.totalCurrent.getTotalValueIn(currency).plus(position.totalUnclaimedFees.getTotalValueIn(currency));
+            const convertedWithdrawn = position.totalWithdrawals.getTotalValueIn(currency).plus(position.totalClaimedFees.getTotalValueIn(currency));
 
             acc.totalInvested = acc.totalInvested.plus(convertedDeposits);
             acc.currentValue = acc.currentValue.plus(convertedCurrent);
@@ -183,7 +156,67 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
             totalWithdrawn: new Decimal(0),
             startDate: null as Date | null
         });
-    }, [convertValue]);
+    }, []);
+
+    const groupedPositions = useMemo(() => {
+        const sortedPositions = Object.entries(positionsData).sort((a, b) =>
+            b[1].lastUpdatedAt.getTime() - a[1].lastUpdatedAt.getTime()
+        );
+
+        return sortedPositions.reduce((acc, [pubKey, data]) => {
+            const pairKey = `${data.tokenXSymbol}-${data.tokenYSymbol}`;
+            if (!acc[pairKey]) {
+                acc[pairKey] = {};
+            }
+            acc[pairKey][pubKey] = data;
+            return acc;
+        }, {} as { [key: string]: { [key: string]: PositionLiquidityData } });
+    }, [positionsData]);
+
+    const getMetricsCalculator = useCallback((
+        positionsData: { [key: string]: PositionLiquidityData },
+        groupedPositions: { [key: string]: { [key: string]: PositionLiquidityData } },
+        selectedCurrency: string,
+        allCurrencies: Record<string, string>,
+        isLoading: boolean
+    ): MetricsState => {
+        if (isLoading || !positionsData || Object.keys(positionsData).length === 0) {
+            return { overall: null, grouped: {} };
+        }
+
+        const summarySymbol = selectedCurrency === DEFAULT_CURRENCY ? 'SOL' : selectedCurrency;
+        const summaryCurrency = allCurrencies[summarySymbol];
+
+        return {
+            overall: calculateMetrics(positionsData, summaryCurrency),
+            grouped: Object.entries(groupedPositions).reduce((acc, [pairKey, positions]) => {
+                const [, tokenYSymbol] = pairKey.split('-');
+                const groupSymbol = selectedCurrency === DEFAULT_CURRENCY ? tokenYSymbol : selectedCurrency;
+                const groupCurrency = allCurrencies[groupSymbol];
+                acc[pairKey] = calculateMetrics(positions, groupCurrency);
+                return acc;
+            }, {} as Record<string, MetricsResult>)
+        };
+    }, [calculateMetrics]);
+
+    const allMetrics = useMemo(() =>
+            getMetricsCalculator(
+                positionsData,
+                groupedPositions,
+                selectedCurrency,
+                allCurrencies,
+                isLoading
+            ),
+        [
+            positionsData,
+            groupedPositions,
+            selectedCurrency,
+            allCurrencies,
+            isLoading,
+            getMetricsCalculator
+        ]
+    );
+
 
     const renderSummary = (metrics: ReturnType<typeof calculateMetrics>, title: string, currency: string) => (
         <div className="bg-base-100 rounded-lg p-6 shadow-sm mb-8">
@@ -243,7 +276,7 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
         </div>
     );
 
-    if (isLoading || isPriceLoading) {
+    if (isLoading || !positionsData || Object.keys(positionsData).length === 0) {
         return <div className="flex justify-center items-center h-screen">
             <span className="loading loading-spinner loading-lg"></span>
         </div>;
@@ -258,31 +291,21 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
         );
     }
 
-    const sortedPositions = Object.entries(positionsData).sort((a, b) =>
-        b[1].lastUpdatedAt.getTime() - a[1].lastUpdatedAt.getTime()
-    );
-
-    const groupedPositions = sortedPositions.reduce((acc, [pubKey, data]) => {
-        const pairKey = `${data.tokenXSymbol}-${data.tokenYSymbol}`;
-        if (!acc[pairKey]) {
-            acc[pairKey] = {};
-        }
-        acc[pairKey][pubKey] = data;
-        return acc;
-    }, {} as { [key: string]: { [key: string]: PositionLiquidityData } });
-
+    const summarySymbol = selectedCurrency === DEFAULT_CURRENCY ? 'SOL' : selectedCurrency;
+    
     return (
         <div className="p-4 max-w-6xl mx-auto">
             <h1 className="text-3xl font-bold mb-8 text-base-content">Positions Status</h1>
             {/* Overall Summary */}
-            {renderSummary(calculateMetrics(positionsData, selectedCurrency), "Overall Summary", selectedCurrency)}
+            {allMetrics.overall && renderSummary(allMetrics.overall, "Overall Summary", summarySymbol)}
 
             {Object.entries(groupedPositions).map(([pairKey, positions]) => {
-                const groupMetrics = calculateMetrics(positions);
+                const groupMetrics = allMetrics.grouped[pairKey] || {} as MetricsType;
                 const [, tokenYSymbol] = pairKey.split('-');
+                const groupSymbol = selectedCurrency === DEFAULT_CURRENCY ? tokenYSymbol : selectedCurrency;
                 return (
                     <div key={pairKey} className="mb-12 border border-base-200 rounded-lg shadow-sm overflow-hidden">
-                        {renderSummary(groupMetrics, `${pairKey}`, tokenYSymbol)}
+                        {renderSummary(groupMetrics, `${pairKey}`, groupSymbol)}
 
                         <div className="bg-base-100 px-6">
                             <div className="flex justify-between items-center mb-6">
@@ -321,21 +344,21 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                 includeSeconds: true
                                             });
                                         };
-                                        const getTotalInvestment = () => prettifyNumber(totalDeposits.totalValueInTokenY);
-                                        const getTotalWithdrawn = () => prettifyNumber(totalWithdrawals.totalValueInTokenY.plus(totalClaimedFees.totalValueInTokenY));
-                                        const getCurrentValue = () => prettifyNumber(totalCurrent.totalValueInTokenY.plus(totalUnclaimedFees.totalValueInTokenY));
+                                        const getTotalInvestment = () => prettifyNumber(totalDeposits.getTotalValueInTokenY());
+                                        const getTotalWithdrawn = () => prettifyNumber(totalWithdrawals.getTotalValueInTokenY().plus(totalClaimedFees.getTotalValueInTokenY()));
+                                        const getCurrentValue = () => prettifyNumber(totalCurrent.getTotalValueInTokenY().plus(totalUnclaimedFees.getTotalValueInTokenY()));
                                         const getNetProfit = () => {
-                                            const profit = totalCurrent.totalValueInTokenY.plus(totalUnclaimedFees.totalValueInTokenY)
-                                                .plus(totalWithdrawals.totalValueInTokenY)
-                                                .plus(totalClaimedFees.totalValueInTokenY)
-                                                .minus(totalDeposits.totalValueInTokenY);
+                                            const profit = totalCurrent.getTotalValueInTokenY().plus(totalUnclaimedFees.getTotalValueInTokenY())
+                                                .plus(totalWithdrawals.getTotalValueInTokenY())
+                                                .plus(totalClaimedFees.getTotalValueInTokenY())
+                                                .minus(totalDeposits.getTotalValueInTokenY());
                                             return prettifyNumber(profit);
                                         };
                                         const getROI = () => {
-                                            const roi = totalCurrent.totalValueInTokenY.plus(totalUnclaimedFees.totalValueInTokenY)
-                                                .plus(totalWithdrawals.totalValueInTokenY)
-                                                .plus(totalClaimedFees.totalValueInTokenY)
-                                                .div(totalDeposits.totalValueInTokenY)
+                                            const roi = totalCurrent.getTotalValueInTokenY().plus(totalUnclaimedFees.getTotalValueInTokenY())
+                                                .plus(totalWithdrawals.getTotalValueInTokenY())
+                                                .plus(totalClaimedFees.getTotalValueInTokenY())
+                                                .div(totalDeposits.getTotalValueInTokenY())
                                                 .minus(1)
                                                 .mul(100);
                                             return prettifyNumber(roi);
@@ -474,35 +497,35 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                             <tbody>
                                                             <tr>
                                                                 <td>Price ({tokenYSymbol} per {tokenXSymbol})</td>
-                                                                <td>{totalDeposits.exchangeRate.isZero() ? '🪙' : prettifyNumber(totalDeposits.exchangeRate)}</td>
-                                                                <td>{totalWithdrawals.exchangeRate.isZero() ? '🪙' : prettifyNumber(totalWithdrawals.exchangeRate)}</td>
-                                                                <td>{totalClaimedFees.exchangeRate.isZero() ? '🪙' : prettifyNumber(totalClaimedFees.exchangeRate)}</td>
-                                                                <td>{totalUnclaimedFees.exchangeRate.isZero() ? '🪙' : prettifyNumber(totalUnclaimedFees.exchangeRate)}</td>
-                                                                <td>{totalCurrent.exchangeRate.isZero() ? '🪙' : prettifyNumber(totalCurrent.exchangeRate)}</td>
+                                                                <td>{totalDeposits.getWeightedExchangeRate().isZero() ? '🪙' : prettifyNumber(totalDeposits.getWeightedExchangeRate())}</td>
+                                                                <td>{totalWithdrawals.getWeightedExchangeRate().isZero() ? '🪙' : prettifyNumber(totalWithdrawals.getWeightedExchangeRate())}</td>
+                                                                <td>{totalClaimedFees.getWeightedExchangeRate().isZero() ? '🪙' : prettifyNumber(totalClaimedFees.getWeightedExchangeRate())}</td>
+                                                                <td>{totalUnclaimedFees.getWeightedExchangeRate().isZero() ? '🪙' : prettifyNumber(totalUnclaimedFees.getWeightedExchangeRate())}</td>
+                                                                <td>{totalCurrent.getWeightedExchangeRate().isZero() ? '🪙' : prettifyNumber(totalCurrent.getWeightedExchangeRate())}</td>
                                                             </tr>
                                                             <tr>
                                                                 <td>Amount {tokenXSymbol}</td>
-                                                                <td>{prettifyNumber(totalDeposits.tokenXBalance)}</td>
-                                                                <td>{prettifyNumber(totalWithdrawals.tokenXBalance)}</td>
-                                                                <td>{prettifyNumber(totalClaimedFees.tokenXBalance)}</td>
-                                                                <td>{prettifyNumber(totalUnclaimedFees.tokenXBalance)}</td>
-                                                                <td>{prettifyNumber(totalCurrent.tokenXBalance)}</td>
+                                                                <td>{prettifyNumber(totalDeposits.getTotalTokenXBalance())}</td>
+                                                                <td>{prettifyNumber(totalWithdrawals.getTotalTokenXBalance())}</td>
+                                                                <td>{prettifyNumber(totalClaimedFees.getTotalTokenXBalance())}</td>
+                                                                <td>{prettifyNumber(totalUnclaimedFees.getTotalTokenXBalance())}</td>
+                                                                <td>{prettifyNumber(totalCurrent.getTotalTokenXBalance())}</td>
                                                             </tr>
                                                             <tr>
                                                                 <td>Amount {tokenYSymbol}</td>
-                                                                <td>{prettifyNumber(totalDeposits.tokenYBalance)}</td>
-                                                                <td>{prettifyNumber(totalWithdrawals.tokenYBalance)}</td>
-                                                                <td>{prettifyNumber(totalClaimedFees.tokenYBalance)}</td>
-                                                                <td>{prettifyNumber(totalUnclaimedFees.tokenYBalance)}</td>
-                                                                <td>{prettifyNumber(totalCurrent.tokenYBalance)}</td>
+                                                                <td>{prettifyNumber(totalDeposits.getTotalTokenYBalance())}</td>
+                                                                <td>{prettifyNumber(totalWithdrawals.getTotalTokenYBalance())}</td>
+                                                                <td>{prettifyNumber(totalClaimedFees.getTotalTokenYBalance())}</td>
+                                                                <td>{prettifyNumber(totalUnclaimedFees.getTotalTokenYBalance())}</td>
+                                                                <td>{prettifyNumber(totalCurrent.getTotalTokenYBalance())}</td>
                                                             </tr>
                                                             <tr>
                                                                 <td>Value in {tokenYSymbol}</td>
-                                                                <td>{prettifyNumber(totalDeposits.totalValueInTokenY)}</td>
-                                                                <td>{prettifyNumber(totalWithdrawals.totalValueInTokenY)}</td>
-                                                                <td>{prettifyNumber(totalClaimedFees.totalValueInTokenY)}</td>
-                                                                <td>{prettifyNumber(totalUnclaimedFees.totalValueInTokenY)}</td>
-                                                                <td>{prettifyNumber(totalCurrent.totalValueInTokenY)}</td>
+                                                                <td>{prettifyNumber(totalDeposits.getTotalValueInTokenY())}</td>
+                                                                <td>{prettifyNumber(totalWithdrawals.getTotalValueInTokenY())}</td>
+                                                                <td>{prettifyNumber(totalClaimedFees.getTotalValueInTokenY())}</td>
+                                                                <td>{prettifyNumber(totalUnclaimedFees.getTotalValueInTokenY())}</td>
+                                                                <td>{prettifyNumber(totalCurrent.getTotalValueInTokenY())}</td>
                                                             </tr>
                                                             </tbody>
                                                         </table>

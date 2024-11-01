@@ -45,3 +45,7 @@ export async function fetchSignaturesForAddress(address: PublicKey, connection: 
 export function blockTime2Date(blockTime: number | undefined): Date {
     return new Date((blockTime || 0) * 1000)
 }
+
+export function date2BlockTime(date: Date = new Date()): number {
+    return Math.floor(date.getTime() / 1000);
+}

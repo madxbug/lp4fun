@@ -14,13 +14,13 @@ import {fetchTokenPrice} from "@/app/utils/jup";
 import {config} from "@/app/utils/config";
 import {FaChartBar, FaCheckDouble, FaTrashAlt} from 'react-icons/fa';
 import {formatPubKey} from "@/app/utils/formatters";
+import {getTokenMetadata} from "@/app/utils/tokenMetadata";
 
 const createDataMap = async (wallet: string): Promise<Map<string, PoolData>> => {
     const connection = new Connection(config.RPC_ENDPOINT);
     const user = new PublicKey(wallet);
     const positions = await fetchWithRetry(() => DLMM.getAllLbPairPositionsByUser(connection, user));
     const map = new Map<string, PoolData>();
-
     await Promise.all(Array.from(positions.entries()).map(async ([key, position]) => {
         const tokenInfo = await fetchTokenPrice(position.tokenX.publicKey, position.tokenY.publicKey);
 
@@ -43,11 +43,12 @@ const createDataMap = async (wallet: string): Promise<Map<string, PoolData>> => 
                 claimedFeeY: formatTokenBalance(BigInt(claimedFeeYAmount), position.tokenY.decimal),
             };
         });
-
+        const mintInfoX = await getTokenMetadata(connection, position.tokenX.publicKey);
+        const mintInfoY = await getTokenMetadata(connection, position.tokenY.publicKey);
         map.set(key, {
             lbPairPositionsData,
-            nameX: tokenInfo.nameX,
-            nameY: tokenInfo.nameY,
+            nameX: mintInfoX?.symbol ?? 'Unknown Token X',
+            nameY: mintInfoY?.symbol ?? 'Unknown Token Y',
             price: tokenInfo.price,
             activeBin: position.lbPair.activeId,
             tokenXDecimal: position.tokenX.decimal,

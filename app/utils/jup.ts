@@ -4,8 +4,7 @@ import {delay} from "@/app/utils/rateLimitedFetch";
 import {config} from "@/app/utils/config";
 
 export async function fetchTokenPrice(tokenX: PublicKey, tokenY: PublicKey, maxRetries = config.MAX_RETRIES, initialDelay = config.INITIAL_RETRY_DELAY): Promise<TokenInfo> {
-    const url = `https://price.jup.ag/v6/price?ids=${tokenX}&vsToken=${tokenY}`;
-
+    const url = `https://api.jup.ag/price/v2?ids=${tokenX},${tokenY}`;
     for (let retries = 0; retries < maxRetries; retries++) {
         try {
             const response = await fetch(url);
@@ -23,11 +22,10 @@ export async function fetchTokenPrice(tokenX: PublicKey, tokenY: PublicKey, maxR
                 continue;
             }
 
-            const tokenData = data.data[tokenX.toString()];
+            const tokenXData = data.data[tokenX.toString()];
+            const tokenYData = data.data[tokenY.toString()];
             return {
-                nameX: tokenData.mintSymbol,
-                nameY: tokenData.vsTokenSymbol,
-                price: tokenData.price,
+                price: tokenXData.price/tokenYData.price,
             };
         } catch (error: unknown) {
             const delayTime = initialDelay * Math.pow(2, retries);
@@ -37,8 +35,6 @@ export async function fetchTokenPrice(tokenX: PublicKey, tokenY: PublicKey, maxR
     }
     console.error(`Max retries (${maxRetries}) reached. Returning default values.`);
     return {
-        nameX: 'N/A',
-        nameY: 'N/A',
         price: -1,
     };
 }

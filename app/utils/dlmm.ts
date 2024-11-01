@@ -1,11 +1,19 @@
 import {Connection, ParsedTransactionWithMeta, PublicKey} from "@solana/web3.js";
 import {AnchorProvider, Program, utils} from "@coral-xyz/anchor";
 import DLMM, {IDL, LBCLMM_PROGRAM_IDS} from "@meteora-ag/dlmm";
-import {BalanceInfo, EventInfo, EventType, PositionLiquidityData, TokenInfo} from "@/app/types";
+import {
+    BalanceInfo,
+    EventInfo,
+    EventType,
+    HistoricalPriceItem,
+    PositionBalanceInfo,
+    PositionLiquidityData,
+    TokenInfo
+} from "@/app/types";
 import {fetchTokenPrice} from "@/app/utils/jup";
 import {fetchWithRetry} from "@/app/utils/rateLimitedFetch";
 import {
-    blockTime2Date,
+    blockTime2Date, date2BlockTime,
     fetchSignaturesForAddress,
     fetchTokenDecimals,
     formatDecimalTokenBalance
@@ -13,6 +21,7 @@ import {
 import {config} from "@/app/utils/config";
 import Decimal from "decimal.js";
 import {determineIntervalIndex, determineOptimalTimeInterval, getHistoricalPrice} from "@/app/utils/birdeye";
+import {getTokenMetadata} from "@/app/utils/tokenMetadata";
 
 const BASIS_POINT_MAX = 10000;
 
@@ -156,11 +165,11 @@ async function getOpenPositionLiveData(
 
         const tokenXBalance = formatDecimalTokenBalance(Number(positionInfo?.positionData.totalXAmount || 0), tokenXDecimals);
         const tokenYBalance = formatDecimalTokenBalance(Number(positionInfo?.positionData.totalYAmount || 0), tokenYDecimals);
-        const totalCurrent = new BalanceInfo(tokenXBalance, tokenYBalance, currentPrice,);
+        const totalCurrent = new BalanceInfo(tokenXBalance, tokenYBalance, currentPrice, date2BlockTime());
 
         const unclaimedFeesX = formatDecimalTokenBalance(Number(positionInfo?.positionData.feeX || 0), tokenXDecimals);
         const unclaimedFeesY = formatDecimalTokenBalance(Number(positionInfo?.positionData.feeY || 0), tokenYDecimals);
-        const totalUnclaimedFees = new BalanceInfo(unclaimedFeesX, unclaimedFeesY, currentPrice);
+        const totalUnclaimedFees = new BalanceInfo(unclaimedFeesX, unclaimedFeesY, currentPrice, date2BlockTime());
 
         return {totalCurrent, totalUnclaimedFees};
     }
@@ -168,29 +177,15 @@ async function getOpenPositionLiveData(
     return {totalCurrent: BalanceInfo.zero(), totalUnclaimedFees: BalanceInfo.zero()};
 }
 
-function calculateWeightedPrice(
-    currentPrice: Decimal,
-    currentValue: Decimal,
-    newPrice: Decimal,
-    addedValue: Decimal
-): Decimal {
-    if (addedValue.isZero()) {
-        return currentPrice;
-    }
-    const totalValue = currentValue.plus(addedValue);
 
-    const currentWeight = currentValue.div(totalValue);
-    const newWeight = addedValue.div(totalValue);
-
-    return currentPrice.mul(currentWeight).plus(newPrice.mul(newWeight));
-}
-
-function calculateBalanceChange(events: Partial<EventInfo>[], binStep: number, tokenXDecimals: number, tokenYDecimals: number): {
-    totalDeposits: BalanceInfo,
-    totalWithdrawals: BalanceInfo,
+function calculateBalanceChange(events: Partial<EventInfo>[], binStep: number,
+                                tokenXDecimals: number, tokenYDecimals: number,
+                                tokenXMint: PublicKey, tokenYMint: PublicKey): {
+    totalDeposits: PositionBalanceInfo,
+    totalWithdrawals: PositionBalanceInfo,
 } {
-    const totalDeposits = BalanceInfo.zero();
-    const totalWithdrawals = BalanceInfo.zero();
+    const totalDeposits = new PositionBalanceInfo([], tokenXMint, tokenYMint);
+    const totalWithdrawals = new PositionBalanceInfo([], tokenXMint, tokenYMint);
 
     for (const event of events) {
         switch (event.operation) {
@@ -204,6 +199,47 @@ function calculateBalanceChange(events: Partial<EventInfo>[], binStep: number, t
     }
     return {totalDeposits, totalWithdrawals};
 }
+
+function getBlockTimesByTokenYMint(positions: [string, PositionLiquidityData][]): { [tokenYMint: string]: number[] } {
+    const blockTimesByMint = new Map<string, Set<number>>();
+
+    positions.forEach(([_, position]) => {
+        const tokenYMintString = position.tokenYMint.toString();
+
+        if (!blockTimesByMint.has(tokenYMintString)) {
+            blockTimesByMint.set(tokenYMintString, new Set<number>());
+        }
+
+        const mintBlockTimes = blockTimesByMint.get(tokenYMintString)!;
+
+        position.operations.forEach(operation => {
+            if (operation.blockTime) {
+                mintBlockTimes.add(operation.blockTime);
+            }
+        });
+
+        const addBalanceInfoBlockTimes = (balanceInfo: PositionBalanceInfo) => {
+            balanceInfo.balances.forEach(balance => {
+                mintBlockTimes.add(balance.blockTime);
+            });
+        };
+
+        addBalanceInfoBlockTimes(position.totalDeposits);
+        addBalanceInfoBlockTimes(position.totalWithdrawals);
+        addBalanceInfoBlockTimes(position.totalUnclaimedFees);
+        addBalanceInfoBlockTimes(position.totalClaimedFees);
+        addBalanceInfoBlockTimes(position.totalCurrent);
+    });
+
+    const result: { [tokenYMint: string]: number[] } = {};
+    blockTimesByMint.forEach((blockTimes, mint) => {
+        result[mint] = Array.from(blockTimes).sort((a, b) => a - b);
+    });
+
+    return result;
+}
+
+const SOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
 
 export async function getPositionsInfo(connection: Connection,
                                        positionPubKeys: string[]): Promise<{ [key: string]: PositionLiquidityData }> {
@@ -258,25 +294,26 @@ export async function getPositionsInfo(connection: Connection,
             const {
                 totalDeposits,
                 totalWithdrawals
-            } = calculateBalanceChange(events, binStep, tokenXDecimals, tokenYDecimals);
-
-            const totalClaimedFees = await calculateClaimedFees(positionCreateEvent.lbPair, events, tokenInfo);
-
+            } = calculateBalanceChange(events, binStep, tokenXDecimals, tokenYDecimals, tokenXMint, tokenYMint);
+            const totalClaimedFees = await calculateClaimedFees(positionCreateEvent.lbPair,
+                events, tokenInfo, tokenXMint, tokenYMint);
+            const mintInfoX = await getTokenMetadata(connection, tokenXMint);
+            const mintInfoY = await getTokenMetadata(connection, tokenYMint);
             positionsData[positionPubKey] = {
                 owner: positionCreateEvent.owner,
                 lbPair: positionCreateEvent.lbPair,
                 operations: events,
-                tokenXSymbol: tokenInfo.nameX,
+                tokenXSymbol: mintInfoX?.symbol ?? 'Unknown Token X',
                 tokenXMint: tokenXMint,
-                tokenYSymbol: tokenInfo.nameY,
+                tokenYSymbol: mintInfoY?.symbol ?? 'Unknown Token Y',
                 tokenYMint: tokenYMint,
                 startDate: blockTime2Date(positionCreateEvent.blockTime),
                 lastUpdatedAt: blockTime2Date(events[events.length - 1].blockTime),
                 totalDeposits,
                 totalWithdrawals,
-                totalUnclaimedFees,
+                totalUnclaimedFees: new PositionBalanceInfo([totalUnclaimedFees], tokenXMint, tokenYMint),
                 totalClaimedFees,
-                totalCurrent
+                totalCurrent: new PositionBalanceInfo([totalCurrent], tokenXMint, tokenYMint)
             };
         } catch (error) {
             console.error(`Error processing position ${positionPubKey}:`, error);
@@ -285,21 +322,21 @@ export async function getPositionsInfo(connection: Connection,
 
     await Promise.all(Object.entries(sessionEvents).map(([positionPubKey, events]) => processPosition(positionPubKey, events)));
 
+    const nonSolPositions = Object.entries(positionsData).filter(([_, position]) => {
+        return !position.tokenXMint.equals(SOL_MINT) &&
+            !position.tokenYMint.equals(SOL_MINT);
+    });
+    await processPositionsWithPrices(nonSolPositions);
     return positionsData;
 }
 
-function updateBalanceWithEvent(balance: BalanceInfo, event: Partial<EventInfo>, price: Decimal): void {
+function updateBalanceWithEvent(balance: PositionBalanceInfo, event: Partial<EventInfo>, price: Decimal): void {
     const tokenXChange = new Decimal(event.tokenXChange || 0);
     const tokenYChange = new Decimal(event.tokenYChange || 0);
-    const valueChange = price.mul(tokenXChange).add(tokenYChange);
-
-    balance.tokenXBalance = balance.tokenXBalance.add(tokenXChange);
-    balance.tokenYBalance = balance.tokenYBalance.add(tokenYChange);
-    balance.exchangeRate = calculateWeightedPrice(balance.exchangeRate, balance.totalValueInTokenY, price, valueChange);
-    balance.totalValueInTokenY = balance.totalValueInTokenY.add(valueChange);
+    balance.add(new BalanceInfo(tokenXChange, tokenYChange, price, event.blockTime || 0))
 }
 
-function updateBalance(balance: BalanceInfo, event: Partial<EventInfo>, binStep: number, tokenXDecimals: number, tokenYDecimals: number): void {
+function updateBalance(balance: PositionBalanceInfo, event: Partial<EventInfo>, binStep: number, tokenXDecimals: number, tokenYDecimals: number): void {
     if (event.tokenXChange === undefined || event.tokenYChange === undefined || event.activeBin === undefined) {
         console.error('Invalid event data:', event);
         return;
@@ -309,8 +346,10 @@ function updateBalance(balance: BalanceInfo, event: Partial<EventInfo>, binStep:
     updateBalanceWithEvent(balance, event, newExchangeRate);
 }
 
-async function calculateClaimedFees(lbPair: PublicKey, events: Partial<EventInfo>[], tokenInfo: TokenInfo): Promise<BalanceInfo> {
-    const totalClaimedFees = BalanceInfo.zero();
+async function calculateClaimedFees(lbPair: PublicKey, events: Partial<EventInfo>[],
+                                    tokenInfo: TokenInfo,
+                                    tokenXMint: PublicKey, tokenYMint: PublicKey): Promise<PositionBalanceInfo> {
+    const totalClaimedFees = new PositionBalanceInfo([], tokenXMint, tokenYMint);
     const claimFeeEvents = events.filter(tx => tx.operation === EventType.ClaimFee);
     if (claimFeeEvents.length === 0) {
         return totalClaimedFees;
@@ -346,4 +385,126 @@ async function calculateClaimedFees(lbPair: PublicKey, events: Partial<EventInfo
     }
 
     return totalClaimedFees;
+}
+
+async function updateBalancesWithHistoricalPrices(blockTimesByMint: { [tokenYMint: string]: number[] },
+                                                  tokenInfo: TokenInfo) {
+    const results: { [tokenYMint: string]: { blockTime: number, price: Decimal }[] } = {};
+
+    for (const [mint, blockTimes] of Object.entries(blockTimesByMint)) {
+        if (blockTimes.length === 0) continue;
+
+        const fromBlockTime = blockTimes[0];
+        const toBlockTime = blockTimes[blockTimes.length - 1];
+        const optimalTimeInterval = determineOptimalTimeInterval(fromBlockTime, toBlockTime);
+
+        const indexedBlockTimes = blockTimes.map(blockTime => ({
+            blockTime,
+            index: determineIntervalIndex(fromBlockTime, optimalTimeInterval, blockTime)
+        }));
+
+        try {
+            const historicalPricesYinUSD = await getHistoricalPrice(
+                mint,
+                'token',
+                optimalTimeInterval,
+                fromBlockTime,
+                toBlockTime
+            );
+            const historicalPricesSOL = await getHistoricalPrice(
+                'So11111111111111111111111111111111111111112',
+                'token',
+                optimalTimeInterval,
+                fromBlockTime,
+                toBlockTime
+            );
+
+            const SOLPriceMap = new Map<number, number>(
+                historicalPricesSOL.data.items.map((item: HistoricalPriceItem) => [item.unixTime, item.value])
+            );
+
+            const historicalPricesYinSOL: HistoricalPriceItem[] = historicalPricesYinUSD.data.items.map((item: HistoricalPriceItem) => {
+                const SOLPrice = SOLPriceMap.get(item.unixTime);
+
+                if (SOLPrice !== undefined) {
+                    return {
+                        ...item,
+                        value: item.value/SOLPrice
+                    };
+                }
+                return item;
+            });
+
+            const maxAvailableIndex = historicalPricesYinSOL.length - 1;
+            const pricesForMint: { blockTime: number, price: Decimal }[] = [];
+
+            for (const indexed of indexedBlockTimes) {
+                const priceIndex = Math.min(indexed.index, maxAvailableIndex);
+                const price = historicalPricesYinSOL[priceIndex];
+
+                if (price) {
+                    pricesForMint.push({
+                        blockTime: indexed.blockTime,
+                        price: new Decimal(price.value)
+                    });
+                }
+            }
+
+            results[mint] = pricesForMint;
+
+        } catch (error) {
+            console.error(`Error fetching historical prices for mint ${mint}:`, error);
+            console.info('Using current JUP price:', tokenInfo.price);
+
+            // Fallback: use current price for all block times
+            results[mint] = blockTimes.map(blockTime => ({
+                blockTime,
+                price: new Decimal(tokenInfo.price)
+            }));
+        }
+    }
+
+    return results;
+}
+
+async function processPositionsWithPrices(positions: [string, PositionLiquidityData][]) {
+    const blockTimesByMint = getBlockTimesByTokenYMint(positions);
+
+    for (const [tokenYMintStr, blockTimes] of Object.entries(blockTimesByMint)) {
+        const samplePosition = positions.find(([_, pos]) => pos.tokenYMint.toString() === tokenYMintStr)?.[1];
+        if (!samplePosition) {
+            console.error(`No position found for mint ${tokenYMintStr}`);
+            continue;
+        }
+
+        const tokenInfo = await fetchTokenPrice(samplePosition.tokenXMint, samplePosition.tokenYMint);
+
+        const pricesByMint = await updateBalancesWithHistoricalPrices(
+            { [tokenYMintStr]: blockTimes },
+            tokenInfo
+        );
+
+        for (const { blockTime, price } of pricesByMint[tokenYMintStr]) {
+            const matchingPositions = positions.filter(([_, pos]) =>
+                pos.tokenYMint.toString() === tokenYMintStr
+            );
+
+            for (const [_, pos] of matchingPositions) {
+                const balances = [
+                    pos.totalDeposits,
+                    pos.totalWithdrawals,
+                    pos.totalUnclaimedFees,
+                    pos.totalClaimedFees,
+                    pos.totalCurrent
+                ];
+
+                balances.forEach(balanceInfo => {
+                    const matchingBalances = balanceInfo.balances.filter(
+                        b => b.blockTime === blockTime
+                    );
+                    matchingBalances.forEach(b => b.setTokenYSOLPrice(price));
+                });
+            }
+        }
+    }
 }
