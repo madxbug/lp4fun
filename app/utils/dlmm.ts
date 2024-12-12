@@ -82,7 +82,7 @@ async function fetchSessionEvents(connection: Connection, positionPubKeys: strin
     const provider = new AnchorProvider(connection, {} as any, AnchorProvider.defaultOptions());
     const program = new Program(IDL, LBCLMM_PROGRAM_IDS["mainnet-beta"], provider);
 
-    const processTransaction = async (transaction: ParsedTransactionWithMeta | null): Promise<Partial<EventInfo>[]> => {
+    const processTransaction = async (transaction: ParsedTransactionWithMeta | null, positionPubKey: string): Promise<Partial<EventInfo>[]> => {
         if (!transaction) return [];
         if (!transaction?.meta?.innerInstructions || transaction.meta.err !== null) return [];
 
@@ -100,7 +100,8 @@ async function fetchSessionEvents(connection: Connection, positionPubKeys: strin
                 let parsedEvent = parseEvent(event);
                 parsedEvent.signature = transaction.transaction.signatures[0];
                 parsedEvent.blockTime = transaction.blockTime ?? 0;
-                if (parsedEvent.operation && parsedEvent.operation in EventType) {  // Ignore unknown operations
+                if (parsedEvent.operation && parsedEvent.operation in EventType && // Ignore unknown operations
+                    parsedEvent.position?.toString() === positionPubKey) {  // Ignore not related operations
                     events.push(parsedEvent);
                 }
             }
@@ -127,7 +128,7 @@ async function fetchSessionEvents(connection: Connection, positionPubKeys: strin
             );
 
             const batchEvents = await Promise.all(
-                transactions.map(transaction => processTransaction(transaction))
+                transactions.map(transaction => processTransaction(transaction, positionPubKey))
             );
 
             allEvents.push(...batchEvents.flat());
