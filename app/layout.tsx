@@ -4,8 +4,6 @@ import "./globals.css";
 import {ThemeProvider} from './contexts/ThemeContext';
 import ThemeToggle from './components/ThemeToggle';
 import React from "react";
-import { Analytics } from '@vercel/analytics/react';
-import { SpeedInsights } from "@vercel/speed-insights/next"
 
 const inter = Inter({subsets: ["latin"]});
 
@@ -47,8 +45,6 @@ export default function RootLayout({children}: { children: React.ReactNode }) {
                 </main>
             </div>
         </ThemeProvider>
-        <Analytics />
-        <SpeedInsights />
         </body>
         </html>
     );

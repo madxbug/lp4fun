@@ -15,6 +15,8 @@ import {config} from "@/app/utils/config";
 import {FaChartBar, FaCheckDouble, FaTrashAlt} from 'react-icons/fa';
 import {formatPubKey} from "@/app/utils/formatters";
 import {getTokenMetadata} from "@/app/utils/tokenMetadata";
+import { Analytics } from '@vercel/analytics/react';
+import { SpeedInsights } from "@vercel/speed-insights/next"
 
 const createDataMap = async (wallet: string): Promise<Map<string, PoolData>> => {
     const connection = new Connection(config.RPC_ENDPOINT);
@@ -228,6 +230,8 @@ const WalletPage: React.FC = () => {
                     </div>
                 </footer>
             )}
+            <Analytics />
+            <SpeedInsights />
         </>
     );
 };

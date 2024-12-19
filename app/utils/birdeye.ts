@@ -18,7 +18,7 @@ export async function getHistoricalPrice(
         check which method is better and more accurate statistically
      */
     if (toBlockTime - fromBlockTime < SECONDS_PER_MINUTE) {
-        toBlockTime += SECONDS_PER_MINUTE;
+        toBlockTime += SECONDS_PER_MINUTE + 1;
     }
     const params = new URLSearchParams({
         address,
