@@ -5,21 +5,21 @@ import {usePathname, useSearchParams} from 'next/navigation';
 import React, {useEffect, useState} from 'react';
 import TableComponent from '@/app/wallet/[[...walletPubKeys]]/TableComponent';
 import DLMM, {LbPosition} from '@meteora-ag/dlmm';
-import {Connection, PublicKey} from '@solana/web3.js';
+import {PublicKey} from '@solana/web3.js';
 import {formatTokenBalance} from "@/app/utils/solana";
 import {PoolData, PositionData, WalletData} from "@/app/types";
 import {bnToDate} from "@/app/utils/numberFormatting";
 import {fetchWithRetry} from "@/app/utils/rateLimitedFetch";
 import {fetchTokenPrice} from "@/app/utils/jup";
-import {config} from "@/app/utils/config";
 import {FaChartBar, FaCheckDouble, FaTrashAlt} from 'react-icons/fa';
 import {formatPubKey} from "@/app/utils/formatters";
 import {getTokenMetadata} from "@/app/utils/tokenMetadata";
 import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from "@vercel/speed-insights/next"
+import {getDefaultConnection} from "@/app/utils/cachedConnection";
 
 const createDataMap = async (wallet: string): Promise<Map<string, PoolData>> => {
-    const connection = new Connection(config.RPC_ENDPOINT);
+    const connection = getDefaultConnection();
     const user = new PublicKey(wallet);
     const positions = await fetchWithRetry(() => DLMM.getAllLbPairPositionsByUser(connection, user));
     const map = new Map<string, PoolData>();

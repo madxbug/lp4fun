@@ -1,6 +1,8 @@
-import { Connection, PublicKey } from '@solana/web3.js';
+import {Connection, PublicKey} from '@solana/web3.js';
+import {createCachedRequestWrapper} from "@/app/utils/cachingUtils";
 
 const METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
+const CACHE_KEY_PREFIX = 'token_metadata_';
 
 export interface TokenMetadata {
     updateAuthority: string;
@@ -10,22 +12,17 @@ export interface TokenMetadata {
     uri: string;
 }
 
-class MetadataDecodeError extends Error {
-    constructor(message: string) {
-        super(message);
-        this.name = "MetadataDecodeError";
-    }
-}
-
-export async function getTokenMetadata(
+async function _getTokenMetadata(
     connection: Connection,
     tokenAddress: PublicKey,
     maxRetries: number = 5,
     initialDelay: number = 1000
 ): Promise<TokenMetadata | null> {
+    const tokenAddressStr = tokenAddress.toString();
+
     for (let retry = 0; retry < maxRetries; retry++) {
         try {
-            const [metadataAddress] = await PublicKey.findProgramAddress(
+            const [metadataAddress] = PublicKey.findProgramAddressSync(
                 [Buffer.from("metadata"), METADATA_PROGRAM_ID.toBuffer(), tokenAddress.toBuffer()],
                 METADATA_PROGRAM_ID
             );
@@ -35,7 +32,7 @@ export async function getTokenMetadata(
             if (accountInfo && accountInfo.data) {
                 return decodeCustomMetadata(accountInfo.data);
             } else {
-                console.log(`No metadata found for token: ${tokenAddress.toString()}`);
+                console.log(`No metadata found for token: ${tokenAddressStr}`);
                 return null;
             }
         } catch (e) {
@@ -51,6 +48,27 @@ export async function getTokenMetadata(
     console.log(`Failed to get token metadata after ${maxRetries} attempts.`);
     return null;
 }
+
+export const getTokenMetadata = createCachedRequestWrapper(_getTokenMetadata, {
+    getCacheKey: (_, tokenAddress) =>
+        `${CACHE_KEY_PREFIX}${tokenAddress.toString()}`,
+
+    getFromLocalStorage: (cacheKey) => {
+        const cachedData = localStorage.getItem(cacheKey);
+        if (cachedData) {
+            return JSON.parse(cachedData) as TokenMetadata;
+        }
+        return null;
+    },
+
+    saveToLocalStorage: (cacheKey, metadata) => {
+        if (metadata) {
+            localStorage.setItem(cacheKey, JSON.stringify(metadata));
+        }
+    },
+
+    getPendingKey: (_, tokenAddress) => tokenAddress.toString()
+});
 
 function decodeCustomMetadata(data: Buffer): TokenMetadata {
     if (data[0] !== 4) {

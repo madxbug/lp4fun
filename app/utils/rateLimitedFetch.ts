@@ -70,7 +70,7 @@ export async function fetchWithRetry<T>(
             const jitter = 500 * (1 + Math.random());
             const delayTime = Math.floor(baseDelay + jitter);
             const timestamp = new Date().toISOString();
-            console.warn(`[${timestamp}] Retry attempt ${retries + 1} after ${delayTime}ms delay`);
+            console.warn(`[${timestamp}] Retry attempt ${retries + 1} after ${delayTime}ms delay due to ${error}`);
             await delay(delayTime);
         }
     }

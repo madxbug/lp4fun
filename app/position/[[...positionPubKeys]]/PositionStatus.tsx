@@ -4,11 +4,10 @@ import {blockTime2Date} from '@/app/utils/solana';
 import {formatDistanceToNow} from "date-fns";
 import {EventInfo, EventType, PositionLiquidityData, MetricsType} from "@/app/types";
 import {prettifyNumber} from "@/app/utils/numberFormatting";
-import {Connection} from '@solana/web3.js';
 import {getPositionsInfo} from "@/app/utils/dlmm";
-import { config } from '@/app/utils/config';
 import Decimal from "decimal.js";
 import {formatPubKey} from "@/app/utils/formatters";
+import {getNoRetryConnection} from "@/app/utils/cachedConnection";
 
 
 const DEFAULT_CURRENCY = "Default";
@@ -92,9 +91,7 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
         setError(null);
 
         try {
-            const connection = new Connection(config.RPC_ENDPOINT, {
-                disableRetryOnRateLimit: true,
-            });
+            const connection = getNoRetryConnection();
             const newPositionsData = await getPositionsInfo(connection, positionPubKeys);
             setPositionsData(newPositionsData);
         } catch (err) {

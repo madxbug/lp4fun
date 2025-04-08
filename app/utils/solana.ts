@@ -4,6 +4,7 @@ import {getMint} from "@solana/spl-token";
 import {fetchWithRetry} from "@/app/utils/rateLimitedFetch";
 import {config} from "@/app/utils/config";
 import Decimal from "decimal.js";
+import {createCachedRequestWrapper} from "@/app/utils/cachingUtils";
 
 
 export const formatTokenBalance = (balance: bigint | number | undefined, decimals: number): number =>
@@ -12,10 +13,32 @@ export const formatTokenBalance = (balance: bigint | number | undefined, decimal
 export const formatDecimalTokenBalance = (balance: bigint | number | undefined, decimals: number): Decimal =>
     new Decimal(formatTokenBalance(balance, decimals));
 
-export const fetchTokenDecimals = async (connection: Connection, mint: PublicKey): Promise<number> => {
+const TOKEN_DECIMALS_CACHE_PREFIX = 'token_decimals_';
+
+async function _fetchTokenDecimals(connection: Connection, mint: PublicKey): Promise<number> {
     const mintInfo = await fetchWithRetry(() => getMint(connection, mint));
     return mintInfo.decimals;
-};
+}
+
+export const fetchTokenDecimals = createCachedRequestWrapper(_fetchTokenDecimals, {
+    getCacheKey: (_, mint) =>
+        `${TOKEN_DECIMALS_CACHE_PREFIX}${mint.toString()}`,
+
+    getFromLocalStorage: (cacheKey) => {
+        const cachedValue = localStorage.getItem(cacheKey);
+        if (cachedValue !== null) {
+            return parseInt(cachedValue, 10);
+        }
+        return null;
+    },
+
+    saveToLocalStorage: (cacheKey, decimals) => {
+        localStorage.setItem(cacheKey, decimals.toString());
+    },
+
+    getPendingKey: (_, mint) => mint.toString()
+});
+
 
 export async function fetchSignaturesForAddress(address: PublicKey, connection: Connection): Promise<{
     signature: string;
