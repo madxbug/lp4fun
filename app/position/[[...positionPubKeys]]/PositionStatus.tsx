@@ -37,22 +37,22 @@ interface PositionStatusProps {
 
 const getEventColor = (operation: string | undefined): string => {
     const colors = {
-        'AddLiquidity': 'bg-success bg-opacity-20 border-success text-success-content',
-        'RemoveLiquidity': 'bg-error bg-opacity-20 border-error text-error-content',
-        'ClaimFee': 'bg-warning bg-opacity-20 border-warning text-warning-content',
-        'PositionClose': 'bg-neutral bg-opacity-50 border border-neutral text-neutral-content',
-        'PositionCreate': 'bg-info bg-opacity-20 border-info text-info-content',
+        'addLiquidity': 'bg-success bg-opacity-20 border-success text-success-content',
+        'removeLiquidity': 'bg-error bg-opacity-20 border-error text-error-content',
+        'claimFee': 'bg-warning bg-opacity-20 border-warning text-warning-content',
+        'positionClose': 'bg-neutral bg-opacity-50 border border-neutral text-neutral-content',
+        'positionCreate': 'bg-info bg-opacity-20 border-info text-info-content',
     };
     return colors[operation as keyof typeof colors] || 'bg-base-200 border-base-300 text-base-content';
 };
 
 const getEventIcon = (operation: string | undefined): string => {
     const icons = {
-        'AddLiquidity': '➕',
-        'RemoveLiquidity': '➖',
-        'ClaimFee': '💰',
-        'PositionClose': '🔒',
-        'PositionCreate': '🆕',
+        'addLiquidity': '➕',
+        'removeLiquidity': '➖',
+        'claimFee': '💰',
+        'positionClose': '🔒',
+        'positionCreate': '🆕',
     };
     return icons[operation as keyof typeof icons] || '❓';
 };

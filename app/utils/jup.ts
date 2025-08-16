@@ -18,7 +18,7 @@ async function _fetchTokenPrice(
     maxRetries = config.MAX_RETRIES,
     initialDelay = config.INITIAL_RETRY_DELAY
 ): Promise<TokenInfo> {
-    const url = `https://api.jup.ag/price/v2?ids=${tokenX},${tokenY}`;
+    const url = `https://lite-api.jup.ag/price/v3?ids=${tokenX},${tokenY}`;
 
     for (let retries = 0; retries < maxRetries; retries++) {
         try {
@@ -31,13 +31,13 @@ async function _fetchTokenPrice(
             const text = await response.text();
             let data = JSON.parse(text);
 
-            if (!data.data || !data.data[tokenX.toString()]) {
+            if (!data || !data[tokenX.toString()]) {
                 console.error('Unexpected response format:', data);
                 continue;
             }
 
-            const tokenXData = data.data[tokenX.toString()];
-            const tokenYData = data.data[tokenY.toString()];
+            const tokenXData = data[tokenX.toString()];
+            const tokenYData = data[tokenY.toString()];
 
             return {
                 price: tokenXData.price/tokenYData.price,

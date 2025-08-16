@@ -85,11 +85,11 @@ export type TimeInterval =
 export type AddressType = 'pair' | 'token';
 
 export enum EventType {
-    AddLiquidity = 'AddLiquidity',
-    RemoveLiquidity = 'RemoveLiquidity',
-    ClaimFee = 'ClaimFee',
-    PositionClose = 'PositionClose',
-    PositionCreate = 'PositionCreate'
+    AddLiquidity = 'addLiquidity',
+    RemoveLiquidity = 'removeLiquidity',
+    ClaimFee = 'claimFee',
+    PositionClose = 'positionClose',
+    PositionCreate = 'positionCreate'
 }
 
 export interface EventInfo {

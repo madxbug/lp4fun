@@ -15,8 +15,28 @@ export const formatDecimalTokenBalance = (balance: bigint | number | undefined, 
 
 const TOKEN_DECIMALS_CACHE_PREFIX = 'token_decimals_';
 
-async function _fetchTokenDecimals(connection: Connection, mint: PublicKey): Promise<number> {
-    const mintInfo = await fetchWithRetry(() => getMint(connection, mint));
+async function _fetchTokenDecimals(
+    connection: Connection,
+    mint: PublicKey
+): Promise<number> {
+    const mintAccountInfo = await connection.getAccountInfo(mint);
+
+    if (!mintAccountInfo) {
+        throw new Error('Mint account not found');
+    }
+
+    // Determine the token program based on the account owner
+    const tokenProgram = mintAccountInfo.owner;
+
+    const mintInfo = await fetchWithRetry(() =>
+        getMint(
+            connection,
+            mint,
+            undefined,
+            tokenProgram
+        )
+    );
+
     return mintInfo.decimals;
 }
 

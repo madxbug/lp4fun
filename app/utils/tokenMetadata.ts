@@ -1,5 +1,6 @@
 import {Connection, PublicKey} from '@solana/web3.js';
 import {createCachedRequestWrapper} from "@/app/utils/cachingUtils";
+import {TOKEN_2022_PROGRAM_ID, getTokenMetadata as getToken2022Metadata} from "@solana/spl-token";
 
 const METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
 const CACHE_KEY_PREFIX = 'token_metadata_';
@@ -22,27 +23,51 @@ async function _getTokenMetadata(
 
     for (let retry = 0; retry < maxRetries; retry++) {
         try {
+            const mintAccount = await connection.getAccountInfo(tokenAddress);
+            if (!mintAccount) {
+                console.log(`Token account not found: ${tokenAddressStr}`);
+                return null;
+            }
+
+            if (mintAccount.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+                const metadata = await getToken2022Metadata(
+                    connection,
+                    tokenAddress,
+                    'confirmed',
+                    TOKEN_2022_PROGRAM_ID
+                );
+                if (metadata) {
+                    return {
+                        name: metadata.name,
+                        symbol: metadata.symbol,
+                        uri: metadata.uri,
+                        updateAuthority: metadata.updateAuthority?.toString() || '',
+                        mint: metadata.mint?.toString() || tokenAddressStr,
+                    };
+                }
+            }
+
             const [metadataAddress] = PublicKey.findProgramAddressSync(
                 [Buffer.from("metadata"), METADATA_PROGRAM_ID.toBuffer(), tokenAddress.toBuffer()],
                 METADATA_PROGRAM_ID
             );
 
             const accountInfo = await connection.getAccountInfo(metadataAddress, 'confirmed');
-
-            if (accountInfo && accountInfo.data) {
+            if (accountInfo?.data) {
                 return decodeCustomMetadata(accountInfo.data);
-            } else {
-                console.log(`No metadata found for token: ${tokenAddressStr}`);
-                return null;
             }
-        } catch (e) {
-            console.error(`Error fetching token metadata: ${e}`);
-            console.error((e as Error).stack);
-        }
 
-        const delayTime = initialDelay * Math.pow(2, retry);
-        console.log(`Get token metadata failed. Retry attempt ${retry + 1} after ${delayTime}ms delay.`);
-        await new Promise(resolve => setTimeout(resolve, delayTime));
+            console.log(`No metadata found for token: ${tokenAddressStr}`);
+            return null;
+
+        } catch (e) {
+            console.error(`Error fetching token metadata:`, e);
+            if (retry === maxRetries - 1) break;
+
+            const delayTime = initialDelay * Math.pow(2, retry);
+            console.log(`Retry ${retry + 1}/${maxRetries} after ${delayTime}ms`);
+            await new Promise(resolve => setTimeout(resolve, delayTime));
+        }
     }
 
     console.log(`Failed to get token metadata after ${maxRetries} attempts.`);

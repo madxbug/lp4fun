@@ -1,6 +1,7 @@
 import {Connection, ParsedTransactionWithMeta, PublicKey} from "@solana/web3.js";
 import {AnchorProvider, Program, utils} from "@coral-xyz/anchor";
-import DLMM, {IDL, LBCLMM_PROGRAM_IDS} from "@meteora-ag/dlmm";
+import DLMM, {IDL} from "@meteora-ag/dlmm";
+import type { LbClmm } from "@meteora-ag/dlmm";
 import {
     BalanceInfo,
     EventInfo,
@@ -80,7 +81,7 @@ async function fetchSessionEvents(connection: Connection, positionPubKeys: strin
     [key: string]: Partial<EventInfo>[]
 }> {
     const provider = new AnchorProvider(connection, {} as any, AnchorProvider.defaultOptions());
-    const program = new Program(IDL, LBCLMM_PROGRAM_IDS["mainnet-beta"], provider);
+    const program = new Program<LbClmm>(IDL, provider);
 
     const processTransaction = async (transaction: ParsedTransactionWithMeta | null, positionPubKey: string): Promise<Partial<EventInfo>[]> => {
         if (!transaction) return [];
@@ -100,8 +101,9 @@ async function fetchSessionEvents(connection: Connection, positionPubKeys: strin
                 let parsedEvent = parseEvent(event);
                 parsedEvent.signature = transaction.transaction.signatures[0];
                 parsedEvent.blockTime = transaction.blockTime ?? 0;
-                if (parsedEvent.operation && parsedEvent.operation in EventType && // Ignore unknown operations
+                if (parsedEvent.operation && Object.values(EventType).includes(parsedEvent.operation) && // Ignore unknown operations
                     parsedEvent.position?.toString() === positionPubKey) {  // Ignore not related operations
+                    parsedEvent.operation = parsedEvent.operation as EventType;
                     events.push(parsedEvent);
                 }
             }
@@ -247,7 +249,7 @@ export async function getPositionsInfo(connection: Connection,
     const positionsData: { [key: string]: PositionLiquidityData } = {};
 
     const provider = new AnchorProvider(connection, {} as any, AnchorProvider.defaultOptions());
-    const program = new Program(IDL, LBCLMM_PROGRAM_IDS["mainnet-beta"], provider);
+    const program =  new Program<LbClmm>(IDL, provider);
     const sessionEvents = await fetchSessionEvents(connection, positionPubKeys);
 
     const processPosition = async (positionPubKey: string, events: Partial<EventInfo>[]) => {
