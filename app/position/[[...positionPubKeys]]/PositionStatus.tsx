@@ -10,15 +10,6 @@ import {formatPubKey} from "@/app/utils/formatters";
 import {getNoRetryConnection} from "@/app/utils/cachedConnection";
 
 
-const DEFAULT_CURRENCY = "Default";
-
-type TokenSymbol = typeof DEFAULT_CURRENCY | 'SOL' | string;
-
-const BASE_TOKENS: Record<TokenSymbol, string> = {
-    [DEFAULT_CURRENCY]: 'xxx',
-    'SOL': 'So11111111111111111111111111111111111111112'
-} as const;
-
 type MetricsResult = {
     totalInvested: Decimal;
     currentValue: Decimal;
@@ -82,9 +73,7 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
     const [showDetails, setShowDetails] = useState<{ [key: string]: boolean }>({});
     const [showOperations, setShowOperations] = useState<{ [key: string]: boolean }>({});
     const [showPositions, setShowPositions] = useState<{ [key: string]: boolean }>({});
-    const [selectedCurrency, setSelectedCurrency] = useState(DEFAULT_CURRENCY);
     const calculateCallCount = useRef(0);
-    const [availableCurrencies, setAvailableCurrencies] = useState<Record<string, string>>({});
 
     const fetchTransactions = useCallback(async () => {
         setIsLoading(true);
@@ -105,40 +94,13 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
         fetchTransactions();
     }, [fetchTransactions]);
 
-    const additionalTokens = useMemo(() => {
-        const tokens: Record<string, string> = {};
-        for (const position of Object.values(positionsData)) {
-            if (!BASE_TOKENS[position.tokenXSymbol] && !tokens[position.tokenXSymbol]) {
-                tokens[position.tokenXSymbol] = position.tokenXMint.toString();
-            }
-            if (!BASE_TOKENS[position.tokenYSymbol] && !tokens[position.tokenYSymbol]) {
-                tokens[position.tokenYSymbol] = position.tokenYMint.toString();
-            }
-        }
-        return tokens;
-    }, [positionsData]);
 
-    const allCurrencies = useMemo(() => ({
-        ...BASE_TOKENS,
-        ...additionalTokens
-    }), [additionalTokens]);
-
-    useEffect(() => {
-        if (Object.keys(additionalTokens).length === 1) {
-            const [additionalTokenSymbol, additionalTokenMint] = Object.entries(additionalTokens)[0];
-            setAvailableCurrencies({ ...BASE_TOKENS, [additionalTokenSymbol]: additionalTokenMint });
-        } else {
-            setAvailableCurrencies(BASE_TOKENS);
-        }
-    }, [additionalTokens]);
-
-    const calculateMetrics = useCallback((positions: { [key: string]: PositionLiquidityData }, currency: string) => {
+    const calculateMetrics = useCallback((positions: { [key: string]: PositionLiquidityData }) => {
         calculateCallCount.current += 1;
-        console.log(`calculateMetrics called ${calculateCallCount.current} times. Currency: ${currency}`);
         return Object.values(positions).reduce((acc, position) => {
-            const convertedDeposits = position.totalDeposits.getTotalValueIn(currency);
-            const convertedCurrent = position.totalCurrent.getTotalValueIn(currency).plus(position.totalUnclaimedFees.getTotalValueIn(currency));
-            const convertedWithdrawn = position.totalWithdrawals.getTotalValueIn(currency).plus(position.totalClaimedFees.getTotalValueIn(currency));
+            const convertedDeposits = position.totalDeposits.getTotalUSDValue();
+            const convertedCurrent = position.totalCurrent.getTotalUSDValue().plus(position.totalUnclaimedFees.getTotalUSDValue());
+            const convertedWithdrawn = position.totalWithdrawals.getTotalUSDValue().plus(position.totalClaimedFees.getTotalUSDValue());
 
             acc.totalInvested = acc.totalInvested.plus(convertedDeposits);
             acc.currentValue = acc.currentValue.plus(convertedCurrent);
@@ -173,24 +135,16 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
     const getMetricsCalculator = useCallback((
         positionsData: { [key: string]: PositionLiquidityData },
         groupedPositions: { [key: string]: { [key: string]: PositionLiquidityData } },
-        selectedCurrency: string,
-        allCurrencies: Record<string, string>,
         isLoading: boolean
     ): MetricsState => {
         if (isLoading || !positionsData || Object.keys(positionsData).length === 0) {
             return { overall: null, grouped: {} };
         }
 
-        const summarySymbol = selectedCurrency === DEFAULT_CURRENCY ? 'SOL' : selectedCurrency;
-        const summaryCurrency = allCurrencies[summarySymbol];
-
         return {
-            overall: calculateMetrics(positionsData, summaryCurrency),
+            overall: calculateMetrics(positionsData),
             grouped: Object.entries(groupedPositions).reduce((acc, [pairKey, positions]) => {
-                const [, tokenYSymbol] = pairKey.split('-');
-                const groupSymbol = selectedCurrency === DEFAULT_CURRENCY ? tokenYSymbol : selectedCurrency;
-                const groupCurrency = allCurrencies[groupSymbol];
-                acc[pairKey] = calculateMetrics(positions, groupCurrency);
+                acc[pairKey] = calculateMetrics(positions);
                 return acc;
             }, {} as Record<string, MetricsResult>)
         };
@@ -200,51 +154,35 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
             getMetricsCalculator(
                 positionsData,
                 groupedPositions,
-                selectedCurrency,
-                allCurrencies,
                 isLoading
             ),
         [
             positionsData,
             groupedPositions,
-            selectedCurrency,
-            allCurrencies,
             isLoading,
             getMetricsCalculator
         ]
     );
 
 
-    const renderSummary = (metrics: ReturnType<typeof calculateMetrics>, title: string, currency: string) => (
+    const renderSummary = (metrics: ReturnType<typeof calculateMetrics>, title: string) => (
         <div className="bg-base-100 rounded-lg p-6 shadow-sm mb-8">
             <div className="flex justify-between items-center mb-4">
                 <h3 className="text-xl font-semibold text-base-content">{title}</h3>
-                {title === "Overall Summary" && (
-                    <select
-                        className="select select-bordered select-sm"
-                        value={selectedCurrency}
-                        onChange={(e) => setSelectedCurrency(e.target.value)}
-                    >
-                        {Object.keys(availableCurrencies).map(currencySymbol => (
-                            <option key={currencySymbol} value={currencySymbol}>
-                                {currencySymbol}
-                            </option>
-                        ))}
-                    </select>
-                )}
+                {title === "Overall Summary"}
             </div>
             <div className="grid grid-cols-3 gap-6">
                 <div className="space-y-1">
                     <p className="text-sm text-base-content/70">Current Value</p>
-                    <p className="text-xl font-medium text-success">{prettifyNumber(metrics.currentValue)} {currency}</p>
+                    <p className="text-xl font-medium text-success">{prettifyNumber(metrics.currentValue)} USD</p>
                 </div>
                 <div className="space-y-1">
                     <p className="text-sm text-base-content/70">Invested</p>
-                    <p className="text-xl font-medium text-info">{prettifyNumber(metrics.totalInvested)} {currency}</p>
+                    <p className="text-xl font-medium text-info">{prettifyNumber(metrics.totalInvested)} USD</p>
                 </div>
                 <div className="space-y-1">
                     <p className="text-sm text-base-content/70">Total Withdrawn</p>
-                    <p className="text-xl font-medium text-warning">{prettifyNumber(metrics.totalWithdrawn)} {currency}</p>
+                    <p className="text-xl font-medium text-warning">{prettifyNumber(metrics.totalWithdrawn)} USD</p>
                 </div>
             </div>
             <div className="divider my-4 opacity-10"></div>
@@ -252,7 +190,7 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                 <div className="space-y-1">
                     <p className="text-sm text-base-content/70">Net Profit</p>
                     <p className={`text-xl font-medium ${metrics.currentValue.plus(metrics.totalWithdrawn).minus(metrics.totalInvested).gte(0) ? 'text-success' : 'text-error'}`}>
-                        {prettifyNumber(metrics.currentValue.plus(metrics.totalWithdrawn).minus(metrics.totalInvested))} {currency}
+                        {prettifyNumber(metrics.currentValue.plus(metrics.totalWithdrawn).minus(metrics.totalInvested))} USD
                     </p>
                 </div>
                 <div className="space-y-1">
@@ -288,21 +226,17 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
         );
     }
 
-    const summarySymbol = selectedCurrency === DEFAULT_CURRENCY ? 'SOL' : selectedCurrency;
-    
     return (
         <div className="p-4 max-w-6xl mx-auto">
             <h1 className="text-3xl font-bold mb-8 text-base-content">Positions Status</h1>
             {/* Overall Summary */}
-            {allMetrics.overall && renderSummary(allMetrics.overall, "Overall Summary", summarySymbol)}
+            {allMetrics.overall && renderSummary(allMetrics.overall, "Overall Summary")}
 
             {Object.entries(groupedPositions).map(([pairKey, positions]) => {
                 const groupMetrics = allMetrics.grouped[pairKey] || {} as MetricsType;
-                const [, tokenYSymbol] = pairKey.split('-');
-                const groupSymbol = selectedCurrency === DEFAULT_CURRENCY ? tokenYSymbol : selectedCurrency;
                 return (
                     <div key={pairKey} className="mb-12 border border-base-200 rounded-lg shadow-sm overflow-hidden">
-                        {renderSummary(groupMetrics, `${pairKey}`, groupSymbol)}
+                        {renderSummary(groupMetrics, `${pairKey}`)}
 
                         <div className="bg-base-100 px-6">
                             <div className="flex justify-between items-center mb-6">
@@ -341,21 +275,27 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                 includeSeconds: true
                                             });
                                         };
-                                        const getTotalInvestment = () => prettifyNumber(totalDeposits.getTotalValueInTokenY());
-                                        const getTotalWithdrawn = () => prettifyNumber(totalWithdrawals.getTotalValueInTokenY().plus(totalClaimedFees.getTotalValueInTokenY()));
-                                        const getCurrentValue = () => prettifyNumber(totalCurrent.getTotalValueInTokenY().plus(totalUnclaimedFees.getTotalValueInTokenY()));
+// Update these calculation functions:
+                                        const getTotalInvestment = () => prettifyNumber(totalDeposits.getTotalUSDValue());
+                                        const getTotalWithdrawn = () => prettifyNumber(totalWithdrawals.getTotalUSDValue().plus(totalClaimedFees.getTotalUSDValue()));
+                                        const getCurrentValue = () => prettifyNumber(totalCurrent.getTotalUSDValue().plus(totalUnclaimedFees.getTotalUSDValue()));
                                         const getNetProfit = () => {
-                                            const profit = totalCurrent.getTotalValueInTokenY().plus(totalUnclaimedFees.getTotalValueInTokenY())
-                                                .plus(totalWithdrawals.getTotalValueInTokenY())
-                                                .plus(totalClaimedFees.getTotalValueInTokenY())
-                                                .minus(totalDeposits.getTotalValueInTokenY());
+                                            const profit = totalCurrent.getTotalUSDValue()
+                                                .plus(totalUnclaimedFees.getTotalUSDValue())
+                                                .plus(totalWithdrawals.getTotalUSDValue())
+                                                .plus(totalClaimedFees.getTotalUSDValue())
+                                                .minus(totalDeposits.getTotalUSDValue());
                                             return prettifyNumber(profit);
                                         };
                                         const getROI = () => {
-                                            const roi = totalCurrent.getTotalValueInTokenY().plus(totalUnclaimedFees.getTotalValueInTokenY())
-                                                .plus(totalWithdrawals.getTotalValueInTokenY())
-                                                .plus(totalClaimedFees.getTotalValueInTokenY())
-                                                .div(totalDeposits.getTotalValueInTokenY())
+                                            const invested = totalDeposits.getTotalUSDValue();
+                                            if (invested.isZero()) return '0';
+
+                                            const roi = totalCurrent.getTotalUSDValue()
+                                                .plus(totalUnclaimedFees.getTotalUSDValue())
+                                                .plus(totalWithdrawals.getTotalUSDValue())
+                                                .plus(totalClaimedFees.getTotalUSDValue())
+                                                .div(invested)
                                                 .minus(1)
                                                 .mul(100);
                                             return prettifyNumber(roi);
@@ -403,16 +343,16 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                         <div className="space-y-1">
                                                             <p className="text-sm text-base-content/70">Current
                                                                 Value</p>
-                                                            <p className="text-xl font-medium text-success">{getCurrentValue()} {tokenYSymbol}</p>
+                                                            <p className="text-xl font-medium text-success">{getCurrentValue()} USD</p>
                                                         </div>
                                                         <div className="space-y-1">
                                                             <p className="text-sm text-base-content/70">Invested</p>
-                                                            <p className="text-xl font-medium text-info">{getTotalInvestment()} {tokenYSymbol}</p>
+                                                            <p className="text-xl font-medium text-info">{getTotalInvestment()} USD</p>
                                                         </div>
                                                         <div className="space-y-1">
                                                             <p className="text-sm text-base-content/70">Total
                                                                 Withdrawn</p>
-                                                            <p className="text-xl font-medium text-warning">{getTotalWithdrawn()} {tokenYSymbol}</p>
+                                                            <p className="text-xl font-medium text-warning">{getTotalWithdrawn()} USD</p>
                                                         </div>
                                                     </div>
                                                     <div className="divider my-2 opacity-10"></div>
@@ -420,7 +360,7 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                         <div className="space-y-1">
                                                             <p className="text-sm text-base-content/70">Net Profit</p>
                                                             <p className={`text-xl font-medium ${parseFloat(getNetProfit()) >= 0 ? 'text-success' : 'text-error'}`}>
-                                                                {getNetProfit()} {tokenYSymbol}
+                                                                {getNetProfit()} USD
                                                             </p>
                                                         </div>
                                                         <div className="space-y-1">
@@ -468,7 +408,6 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                     </div>
                                                 </div>
 
-                                                {/* Detailed Table (Hidden by default) */}
                                                 {showDetails[pubKey] && (
                                                     <div className="overflow-x-auto mb-4">
                                                         <table className="table table-zebra w-full">
@@ -476,11 +415,8 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                             <tr>
                                                                 <th>Metric</th>
                                                                 <th>Investment</th>
-                                                                <th colSpan={2} className="text-center">Profit Taken
-                                                                </th>
-                                                                <th colSpan={2} className="text-center">Current
-                                                                    Position
-                                                                </th>
+                                                                <th colSpan={2} className="text-center">Profit Taken</th>
+                                                                <th colSpan={2} className="text-center">Current Position</th>
                                                             </tr>
                                                             <tr>
                                                                 <th></th>
@@ -493,12 +429,12 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                             </thead>
                                                             <tbody>
                                                             <tr>
-                                                                <td>Price ({tokenYSymbol} per {tokenXSymbol})</td>
-                                                                <td>{totalDeposits.getWeightedExchangeRate().isZero() ? '🪙' : prettifyNumber(totalDeposits.getWeightedExchangeRate())}</td>
-                                                                <td>{totalWithdrawals.getWeightedExchangeRate().isZero() ? '🪙' : prettifyNumber(totalWithdrawals.getWeightedExchangeRate())}</td>
-                                                                <td>{totalClaimedFees.getWeightedExchangeRate().isZero() ? '🪙' : prettifyNumber(totalClaimedFees.getWeightedExchangeRate())}</td>
-                                                                <td>{totalUnclaimedFees.getWeightedExchangeRate().isZero() ? '🪙' : prettifyNumber(totalUnclaimedFees.getWeightedExchangeRate())}</td>
-                                                                <td>{totalCurrent.getWeightedExchangeRate().isZero() ? '🪙' : prettifyNumber(totalCurrent.getWeightedExchangeRate())}</td>
+                                                                <td>USD Value</td>
+                                                                <td>${prettifyNumber(totalDeposits.getTotalUSDValue())}</td>
+                                                                <td>${prettifyNumber(totalWithdrawals.getTotalUSDValue())}</td>
+                                                                <td>${prettifyNumber(totalClaimedFees.getTotalUSDValue())}</td>
+                                                                <td>${prettifyNumber(totalUnclaimedFees.getTotalUSDValue())}</td>
+                                                                <td>${prettifyNumber(totalCurrent.getTotalUSDValue())}</td>
                                                             </tr>
                                                             <tr>
                                                                 <td>Amount {tokenXSymbol}</td>
@@ -515,14 +451,6 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                                 <td>{prettifyNumber(totalClaimedFees.getTotalTokenYBalance())}</td>
                                                                 <td>{prettifyNumber(totalUnclaimedFees.getTotalTokenYBalance())}</td>
                                                                 <td>{prettifyNumber(totalCurrent.getTotalTokenYBalance())}</td>
-                                                            </tr>
-                                                            <tr>
-                                                                <td>Value in {tokenYSymbol}</td>
-                                                                <td>{prettifyNumber(totalDeposits.getTotalValueInTokenY())}</td>
-                                                                <td>{prettifyNumber(totalWithdrawals.getTotalValueInTokenY())}</td>
-                                                                <td>{prettifyNumber(totalClaimedFees.getTotalValueInTokenY())}</td>
-                                                                <td>{prettifyNumber(totalUnclaimedFees.getTotalValueInTokenY())}</td>
-                                                                <td>{prettifyNumber(totalCurrent.getTotalValueInTokenY())}</td>
                                                             </tr>
                                                             </tbody>
                                                         </table>

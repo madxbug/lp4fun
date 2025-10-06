@@ -1,28 +1,20 @@
-import {Connection, ParsedTransactionWithMeta, PublicKey} from "@solana/web3.js";
-import {AnchorProvider, Program, utils} from "@coral-xyz/anchor";
-import DLMM, {IDL} from "@meteora-ag/dlmm";
-import type { LbClmm } from "@meteora-ag/dlmm";
-import {
-    BalanceInfo,
-    EventInfo,
-    EventType,
-    HistoricalPriceItem,
-    PositionBalanceInfo,
-    PositionLiquidityData,
-    TokenInfo
-} from "@/app/types";
-import {fetchTokenPrice} from "@/app/utils/jup";
+// app/utils/dlmm.ts
+import {Connection, PublicKey} from "@solana/web3.js";
+import {AnchorProvider, Program} from "@coral-xyz/anchor";
+import DLMM, {IDL, LbClmm} from "@meteora-ag/dlmm";
+import {BalanceInfo, EventInfo, EventType, PositionBalanceInfo, PositionLiquidityData,} from "@/app/types";
 import {fetchWithRetry} from "@/app/utils/rateLimitedFetch";
-import {
-    blockTime2Date, date2BlockTime,
-    fetchSignaturesForAddress,
-    fetchTokenDecimals,
-    formatDecimalTokenBalance
-} from "@/app/utils/solana";
-import {config} from "@/app/utils/config";
+import {blockTime2Date, date2BlockTime, fetchTokenDecimals, formatDecimalTokenBalance} from "@/app/utils/solana";
 import Decimal from "decimal.js";
-import {determineIntervalIndex, determineOptimalTimeInterval, getHistoricalPrice} from "@/app/utils/birdeye";
 import {getTokenMetadata} from "@/app/utils/tokenMetadata";
+import {
+    fetchMeteoraPositionMeta,
+    fetchPositionOperations,
+    MeteoraClaimFee,
+    MeteoraDeposit,
+    MeteoraWithdraw
+} from "@/app/utils/meteoraAPI";
+import {fetchTokenUsdPrice} from "@/app/utils/jup";
 
 const BASIS_POINT_MAX = 10000;
 
@@ -32,482 +24,249 @@ export function getPriceFromBinId(binId: number, binStep: number, tokenXDecimal:
     return base.pow(binId).mul(Math.pow(10, tokenXDecimal - tokenYDecimal));
 }
 
+type MeteoraOp = MeteoraDeposit | MeteoraWithdraw | MeteoraClaimFee;
 
-function parseEvent(event: any): Partial<EventInfo> {
-    const baseEvent = {
-        operation: event.name as EventType,
-        lbPair: event.data.lbPair,
-        position: event.data.position,
-        tokenXChange: new Decimal(0),
-        tokenYChange: new Decimal(0)
-    };
-    switch (event.name) {
-        case EventType.AddLiquidity:
-        case EventType.RemoveLiquidity:
-            return {
-                ...baseEvent,
-                tokenXChange: event.data.amounts[0].toNumber(),
-                tokenYChange: event.data.amounts[1].toNumber(),
-                activeBin: event.data.activeBinId,
-                lbPair: event.data.lbPair,
-                position: event.data.position
-            };
-        case EventType.ClaimFee:
-            return {
-                ...baseEvent,
-                tokenXChange: event.data.feeX,
-                tokenYChange: event.data.feeY,
-                lbPair: event.data.lbPair,
-                position: event.data.position
-            };
-        case EventType.PositionClose:
-            return {
-                ...baseEvent,
-                position: event.data.position
-            };
-        case EventType.PositionCreate:
-            return {
-                ...baseEvent,
-                lbPair: event.data.lbPair,
-                position: event.data.position,
-                owner: event.data.owner
-            };
-        default:
-            return baseEvent;
+function processMeteoraOperations(
+    operations: MeteoraOp[],
+    tokenXMint: PublicKey,
+    tokenYMint: PublicKey
+): PositionBalanceInfo {
+    const balanceInfo = new PositionBalanceInfo([], tokenXMint, tokenYMint);
+
+    const toDec = (v: unknown) =>
+        new Decimal(typeof v === "string" ? v : (v ?? 0) as number);
+
+    const isClaimFee = (op: MeteoraOp): op is MeteoraClaimFee =>
+        "fee_x_amount" in op || "fee_x_usd_amount" in op;
+
+    operations.sort((a, b) => a.onchain_timestamp - b.onchain_timestamp);
+
+    for (const op of operations) {
+        const tokenXAmount = toDec(isClaimFee(op) ? op.fee_x_amount : (op as MeteoraDeposit).token_x_amount);
+        const tokenYAmount = toDec(isClaimFee(op) ? op.fee_y_amount : (op as MeteoraDeposit).token_y_amount);
+
+        const usdValue = toDec(isClaimFee(op) ? op.fee_x_usd_amount : (op as MeteoraDeposit).token_x_usd_amount)
+            .plus(toDec(isClaimFee(op) ? op.fee_y_usd_amount : (op as MeteoraDeposit).token_y_usd_amount));
+
+        balanceInfo.add(
+            new BalanceInfo(tokenXAmount, tokenYAmount, usdValue, op.onchain_timestamp)
+        );
     }
+
+    return balanceInfo;
 }
 
-async function fetchSessionEvents(connection: Connection, positionPubKeys: string[]): Promise<{
-    [key: string]: Partial<EventInfo>[]
-}> {
-    const provider = new AnchorProvider(connection, {} as any, AnchorProvider.defaultOptions());
-    const program = new Program<LbClmm>(IDL, provider);
-
-    const processTransaction = async (transaction: ParsedTransactionWithMeta | null, positionPubKey: string): Promise<Partial<EventInfo>[]> => {
-        if (!transaction) return [];
-        if (!transaction?.meta?.innerInstructions || transaction.meta.err !== null) return [];
-
-        const events: Partial<EventInfo>[] = [];
-
-        for (const ix of transaction.meta.innerInstructions) {
-            for (const iix of ix.instructions) {
-                if (!iix.programId.equals(program.programId) || !("data" in iix)) continue;
-
-                const ixData = utils.bytes.bs58.decode(iix.data);
-                const eventData = utils.bytes.base64.encode(ixData.subarray(8));
-                const event = program.coder.events.decode(eventData);
-
-                if (!event) continue;
-                let parsedEvent = parseEvent(event);
-                parsedEvent.signature = transaction.transaction.signatures[0];
-                parsedEvent.blockTime = transaction.blockTime ?? 0;
-                if (parsedEvent.operation && Object.values(EventType).includes(parsedEvent.operation) && // Ignore unknown operations
-                    parsedEvent.position?.toString() === positionPubKey) {  // Ignore not related operations
-                    parsedEvent.operation = parsedEvent.operation as EventType;
-                    events.push(parsedEvent);
-                }
-            }
-        }
-
-        return events;
-    };
-
-    const fetchEventsForPosition = async (positionPubKey: string): Promise<Partial<EventInfo>[]> => {
-        const address = new PublicKey(positionPubKey);
-        const allSignatures = await fetchSignaturesForAddress(address, connection);
-
-        const allEvents: Partial<EventInfo>[] = [];
-
-        for (let i = allSignatures.length - 1; i >= 0; i -= config.MAX_BATCH_SIZE) {
-            const startIndex = Math.max(0, i - config.MAX_BATCH_SIZE + 1);
-            const batchSignatures = allSignatures.slice(startIndex, i + 1).reverse();
-
-            const transactions = await fetchWithRetry(() =>
-                connection.getParsedTransactions(
-                    batchSignatures.map(s => s.signature),
-                    {maxSupportedTransactionVersion: 0}
-                )
-            );
-
-            const batchEvents = await Promise.all(
-                transactions.map(transaction => processTransaction(transaction, positionPubKey))
-            );
-
-            allEvents.push(...batchEvents.flat());
-        }
-
-        return allEvents;
-    };
-
-    const positionsData = await Promise.all(
-        positionPubKeys.map(async (positionPubKey) => ({
-            [positionPubKey]: await fetchEventsForPosition(positionPubKey)
-        }))
-    );
-
-    return Object.assign({}, ...positionsData);
-}
-
-async function getOpenPositionLiveData(
+async function getCurrentPositionData(
     connection: Connection,
     positionPubKey: string,
     lbPair: PublicKey,
     owner: PublicKey,
-    activeId: number,
-    binStep: number,
     tokenXDecimals: number,
-    tokenYDecimals: number
+    tokenYDecimals: number,
+    tokenXMint: PublicKey,
+    tokenYMint: PublicKey
 ): Promise<{ totalCurrent: BalanceInfo, totalUnclaimedFees: BalanceInfo }> {
-    const dlmm = await fetchWithRetry(() => DLMM.create(connection, lbPair));
-    const {userPositions} = await fetchWithRetry(() => dlmm.getPositionsByUserAndLbPair(owner));
-    const address = new PublicKey(positionPubKey);
-    const positionInfo = userPositions.find(obj => obj.publicKey.equals(address));
+    try {
+        const dlmm = await fetchWithRetry(() => DLMM.create(connection, lbPair));
+        const {userPositions} = await fetchWithRetry(() => dlmm.getPositionsByUserAndLbPair(owner));
+        const address = new PublicKey(positionPubKey);
+        const positionInfo = userPositions.find(obj => obj.publicKey.equals(address));
 
-    if (positionInfo) {
-        const currentPrice = getPriceFromBinId(activeId, binStep, tokenXDecimals, tokenYDecimals);
+        if (positionInfo) {
+            const tokenXBalance = formatDecimalTokenBalance(
+                Number(positionInfo.positionData.totalXAmount || 0),
+                tokenXDecimals
+            );
+            const tokenYBalance = formatDecimalTokenBalance(
+                Number(positionInfo.positionData.totalYAmount || 0),
+                tokenYDecimals
+            );
 
-        const tokenXBalance = formatDecimalTokenBalance(Number(positionInfo?.positionData.totalXAmount || 0), tokenXDecimals);
-        const tokenYBalance = formatDecimalTokenBalance(Number(positionInfo?.positionData.totalYAmount || 0), tokenYDecimals);
-        const totalCurrent = new BalanceInfo(tokenXBalance, tokenYBalance, currentPrice, date2BlockTime());
+            const unclaimedFeesX = formatDecimalTokenBalance(
+                Number(positionInfo.positionData.feeX || 0),
+                tokenXDecimals
+            );
+            const unclaimedFeesY = formatDecimalTokenBalance(
+                Number(positionInfo.positionData.feeY || 0),
+                tokenYDecimals
+            );
 
-        const unclaimedFeesX = formatDecimalTokenBalance(Number(positionInfo?.positionData.feeX || 0), tokenXDecimals);
-        const unclaimedFeesY = formatDecimalTokenBalance(Number(positionInfo?.positionData.feeY || 0), tokenYDecimals);
-        const totalUnclaimedFees = new BalanceInfo(unclaimedFeesX, unclaimedFeesY, currentPrice, date2BlockTime());
+            const [tokenXUsdPrice, tokenYUsdPrice] = (await Promise.all([
+                fetchTokenUsdPrice(tokenXMint),
+                fetchTokenUsdPrice(tokenYMint)
+            ])).map(price => new Decimal(price));
 
-        return {totalCurrent, totalUnclaimedFees};
+            const currentUsdValue = tokenXBalance.mul(tokenXUsdPrice).plus(tokenYBalance.mul(tokenYUsdPrice));
+            const unclaimedFeesUsdValue = unclaimedFeesX.mul(tokenXUsdPrice).plus(unclaimedFeesY.mul(tokenYUsdPrice));
+
+            const totalCurrent = new BalanceInfo(tokenXBalance, tokenYBalance, currentUsdValue, date2BlockTime());
+            const totalUnclaimedFees = new BalanceInfo(unclaimedFeesX, unclaimedFeesY, unclaimedFeesUsdValue, date2BlockTime());
+
+            return {totalCurrent, totalUnclaimedFees};
+        }
+    } catch (error) {
+        console.error(`Error fetching current position data for ${positionPubKey}:`, error);
     }
 
     return {totalCurrent: BalanceInfo.zero(), totalUnclaimedFees: BalanceInfo.zero()};
 }
 
 
-function calculateBalanceChange(events: Partial<EventInfo>[], binStep: number,
-                                tokenXDecimals: number, tokenYDecimals: number,
-                                tokenXMint: PublicKey, tokenYMint: PublicKey): {
-    totalDeposits: PositionBalanceInfo,
-    totalWithdrawals: PositionBalanceInfo,
-} {
-    const totalDeposits = new PositionBalanceInfo([], tokenXMint, tokenYMint);
-    const totalWithdrawals = new PositionBalanceInfo([], tokenXMint, tokenYMint);
+function buildEventsFromMeteoraOps(
+    deposits: MeteoraDeposit[],
+    withdrawals: MeteoraWithdraw[],
+    claimFees: MeteoraClaimFee[],
+    lbPair: PublicKey,
+    position: PublicKey,
+    owner: PublicKey,
+    fallbackActiveBin: number
+): EventInfo[] {
+    const evts: EventInfo[] = [];
 
-    for (const event of events) {
-        switch (event.operation) {
-            case EventType.AddLiquidity:
-                updateBalance(totalDeposits, event, binStep, tokenXDecimals, tokenYDecimals);
-                break;
-            case EventType.RemoveLiquidity:
-                updateBalance(totalWithdrawals, event, binStep, tokenXDecimals, tokenYDecimals);
-                break;
-        }
-    }
-    return {totalDeposits, totalWithdrawals};
-}
-
-function getBlockTimesByTokenYMint(positions: [string, PositionLiquidityData][]): { [tokenYMint: string]: number[] } {
-    const blockTimesByMint = new Map<string, Set<number>>();
-
-    positions.forEach(([_, position]) => {
-        const tokenYMintString = position.tokenYMint.toString();
-
-        if (!blockTimesByMint.has(tokenYMintString)) {
-            blockTimesByMint.set(tokenYMintString, new Set<number>());
-        }
-
-        const mintBlockTimes = blockTimesByMint.get(tokenYMintString)!;
-
-        position.operations.forEach(operation => {
-            if (operation.blockTime) {
-                mintBlockTimes.add(operation.blockTime);
-            }
+    // Deposits → AddLiquidity (amounts positive)
+    for (const d of deposits) {
+        evts.push({
+            operation: EventType.AddLiquidity,
+            signature: d.tx_id,
+            blockTime: d.onchain_timestamp,
+            lbPair,
+            position,
+            owner,
+            tokenXChange: new Decimal(d.token_x_amount ?? 0),
+            tokenYChange: new Decimal(d.token_y_amount ?? 0),
+            activeBin: (d as any).active_bin_id ?? fallbackActiveBin,
         });
+    }
 
-        const addBalanceInfoBlockTimes = (balanceInfo: PositionBalanceInfo) => {
-            balanceInfo.balances.forEach(balance => {
-                mintBlockTimes.add(balance.blockTime);
-            });
-        };
+    // Withdraws → RemoveLiquidity (amounts NEGATIVE to reflect outflow)
+    for (const w of withdrawals) {
+        evts.push({
+            operation: EventType.RemoveLiquidity,
+            signature: w.tx_id,
+            blockTime: w.onchain_timestamp,
+            lbPair,
+            position,
+            owner,
+            tokenXChange: new Decimal(w.token_x_amount ?? 0).neg(),
+            tokenYChange: new Decimal(w.token_y_amount ?? 0).neg(),
+            activeBin: (w as any).active_bin_id ?? fallbackActiveBin,
+        });
+    }
 
-        addBalanceInfoBlockTimes(position.totalDeposits);
-        addBalanceInfoBlockTimes(position.totalWithdrawals);
-        addBalanceInfoBlockTimes(position.totalUnclaimedFees);
-        addBalanceInfoBlockTimes(position.totalClaimedFees);
-        addBalanceInfoBlockTimes(position.totalCurrent);
-    });
+    // Claim fees → ClaimFee (amounts positive)
+    for (const c of claimFees) {
+        evts.push({
+            operation: EventType.ClaimFee,
+            signature: c.tx_id,
+            blockTime: c.onchain_timestamp,
+            lbPair,
+            position,
+            owner,
+            tokenXChange: new Decimal(c.fee_x_amount ?? 0),
+            tokenYChange: new Decimal(c.fee_y_amount ?? 0),
+            // claim_fees response usually lacks active_bin_id → fallback
+            activeBin: (c as any).active_bin_id ?? fallbackActiveBin,
+        });
+    }
 
-    const result: { [tokenYMint: string]: number[] } = {};
-    blockTimesByMint.forEach((blockTimes, mint) => {
-        result[mint] = Array.from(blockTimes).sort((a, b) => a - b);
-    });
-
-    return result;
+    // Order chronologically
+    evts.sort((a, b) => a.blockTime - b.blockTime);
+    return evts;
 }
 
-const SOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
-
-export async function getPositionsInfo(connection: Connection,
-                                       positionPubKeys: string[]): Promise<{ [key: string]: PositionLiquidityData }> {
+export async function getPositionsInfo(
+    connection: Connection,
+    positionPubKeys: string[]
+): Promise<{ [key: string]: PositionLiquidityData }> {
     const positionsData: { [key: string]: PositionLiquidityData } = {};
-
     const provider = new AnchorProvider(connection, {} as any, AnchorProvider.defaultOptions());
-    const program =  new Program<LbClmm>(IDL, provider);
-    const sessionEvents = await fetchSessionEvents(connection, positionPubKeys);
+    const program = new Program<LbClmm>(IDL, provider);
 
-    const processPosition = async (positionPubKey: string, events: Partial<EventInfo>[]) => {
-        const positionCreateEvent = events.find(event => event.operation === EventType.PositionCreate);
-        if (!positionCreateEvent || !positionCreateEvent.lbPair || !positionCreateEvent.owner) {
-            console.error("Wasn't able to find position Create event in position:", positionPubKey);
-            return;
-        }
+    const processPosition = async (positionPubKey: string) => {
         try {
+            const meta = await fetchMeteoraPositionMeta(positionPubKey);
+            if (!meta?.pair_address || !meta?.owner) {
+                throw new Error(`Missing pair_address or owner for position ${positionPubKey}`);
+            }
+
+            const lbPair = new PublicKey(meta.pair_address);
+            const owner = new PublicKey(meta.owner);
+
             const {activeId, binStep, tokenXMint, tokenYMint} = await fetchWithRetry(() =>
-                program.account.lbPair.fetch(positionCreateEvent.lbPair as PublicKey)
+                program.account.lbPair.fetch(lbPair)
             );
 
             const [tokenXDecimals, tokenYDecimals] = await Promise.all([
                 fetchTokenDecimals(connection, tokenXMint),
-                fetchTokenDecimals(connection, tokenYMint)
+                fetchTokenDecimals(connection, tokenYMint),
             ]);
 
-            events.forEach(event => {
-                event.tokenXChange = formatDecimalTokenBalance(Number(event.tokenXChange), tokenXDecimals);
-                event.tokenYChange = formatDecimalTokenBalance(Number(event.tokenYChange), tokenYDecimals);
-            });
-
-            const tokenInfo = await fetchTokenPrice(tokenXMint, tokenYMint);
-
-            const positionCloseEvent = events.find(event => event.operation === EventType.PositionClose);
-
-            let totalCurrent = BalanceInfo.zero();
-            let totalUnclaimedFees = BalanceInfo.zero();
-
-            // position is still open, fetch position live data
-            if (!positionCloseEvent) {
-                ({totalCurrent, totalUnclaimedFees} = await getOpenPositionLiveData(
-                    connection,
-                    positionPubKey,
-                    positionCreateEvent.lbPair,
-                    positionCreateEvent.owner,
-                    activeId,
-                    binStep,
-                    tokenXDecimals,
-                    tokenYDecimals
-                ));
-            }
-
             const {
-                totalDeposits,
-                totalWithdrawals
-            } = calculateBalanceChange(events, binStep, tokenXDecimals, tokenYDecimals, tokenXMint, tokenYMint);
-            const totalClaimedFees = await calculateClaimedFees(positionCreateEvent.lbPair,
-                events, tokenInfo, tokenXMint, tokenYMint);
-            const mintInfoX = await getTokenMetadata(connection, tokenXMint);
-            const mintInfoY = await getTokenMetadata(connection, tokenYMint);
+                deposits,
+                withdrawals,
+                claimFees
+            } = await fetchPositionOperations(positionPubKey, tokenXDecimals, tokenYDecimals);
+
+            const operations: EventInfo[] = buildEventsFromMeteoraOps(
+                deposits,
+                withdrawals,
+                claimFees,
+                lbPair,
+                new PublicKey(positionPubKey),
+                owner,
+                Number(activeId)
+            );
+
+            const totalDeposits = processMeteoraOperations(deposits, tokenXMint, tokenYMint);
+            const totalWithdrawals = processMeteoraOperations(withdrawals, tokenXMint, tokenYMint);
+            const totalClaimedFees = processMeteoraOperations(claimFees, tokenXMint, tokenYMint);
+
+            const {totalCurrent, totalUnclaimedFees} = await getCurrentPositionData(
+                connection,
+                positionPubKey,
+                lbPair,
+                owner,
+                tokenXDecimals,
+                tokenYDecimals,
+                tokenXMint,
+                tokenYMint
+            );
+
+            const [mintInfoX, mintInfoY] = await Promise.all([
+                getTokenMetadata(connection, tokenXMint),
+                getTokenMetadata(connection, tokenYMint),
+            ]);
+
+            const allTimes = [
+                ...deposits.map(d => d.onchain_timestamp),
+                ...withdrawals.map(w => w.onchain_timestamp),
+                ...claimFees.map(c => c.onchain_timestamp),
+            ].filter(t => Number.isFinite(t) && t > 0).sort((a, b) => a - b);
+
+            const startDate = allTimes.length ? blockTime2Date(allTimes[0]) : new Date();
+            const lastUpdatedAt = allTimes.length ? blockTime2Date(allTimes[allTimes.length - 1]) : new Date();
+
             positionsData[positionPubKey] = {
-                owner: positionCreateEvent.owner,
-                lbPair: positionCreateEvent.lbPair,
-                operations: events,
+                owner,
+                lbPair,
+                operations,
                 tokenXSymbol: mintInfoX?.symbol ?? 'Unknown Token X',
-                tokenXMint: tokenXMint,
+                tokenXMint,
                 tokenYSymbol: mintInfoY?.symbol ?? 'Unknown Token Y',
-                tokenYMint: tokenYMint,
-                startDate: blockTime2Date(positionCreateEvent.blockTime),
-                lastUpdatedAt: blockTime2Date(events[events.length - 1].blockTime),
+                tokenYMint,
+                startDate,
+                lastUpdatedAt,
                 totalDeposits,
                 totalWithdrawals,
                 totalUnclaimedFees: new PositionBalanceInfo([totalUnclaimedFees], tokenXMint, tokenYMint),
                 totalClaimedFees,
-                totalCurrent: new PositionBalanceInfo([totalCurrent], tokenXMint, tokenYMint)
+                totalCurrent: new PositionBalanceInfo([totalCurrent], tokenXMint, tokenYMint),
             };
         } catch (error) {
             console.error(`Error processing position ${positionPubKey}:`, error);
         }
     };
 
-    await Promise.all(Object.entries(sessionEvents).map(([positionPubKey, events]) => processPosition(positionPubKey, events)));
-
-    const nonSolPositions = Object.entries(positionsData).filter(([_, position]) => {
-        return !position.tokenXMint.equals(SOL_MINT) &&
-            !position.tokenYMint.equals(SOL_MINT);
-    });
-    await processPositionsWithPrices(nonSolPositions);
+    await Promise.all(positionPubKeys.map(processPosition));
     return positionsData;
-}
-
-function updateBalanceWithEvent(balance: PositionBalanceInfo, event: Partial<EventInfo>, price: Decimal): void {
-    const tokenXChange = new Decimal(event.tokenXChange || 0);
-    const tokenYChange = new Decimal(event.tokenYChange || 0);
-    balance.add(new BalanceInfo(tokenXChange, tokenYChange, price, event.blockTime || 0))
-}
-
-function updateBalance(balance: PositionBalanceInfo, event: Partial<EventInfo>, binStep: number, tokenXDecimals: number, tokenYDecimals: number): void {
-    if (event.tokenXChange === undefined || event.tokenYChange === undefined || event.activeBin === undefined) {
-        console.error('Invalid event data:', event);
-        return;
-    }
-
-    const newExchangeRate = getPriceFromBinId(event.activeBin, binStep, tokenXDecimals, tokenYDecimals);
-    updateBalanceWithEvent(balance, event, newExchangeRate);
-}
-
-async function calculateClaimedFees(lbPair: PublicKey, events: Partial<EventInfo>[],
-                                    tokenInfo: TokenInfo,
-                                    tokenXMint: PublicKey, tokenYMint: PublicKey): Promise<PositionBalanceInfo> {
-    const totalClaimedFees = new PositionBalanceInfo([], tokenXMint, tokenYMint);
-    const claimFeeEvents = events.filter(tx => tx.operation === EventType.ClaimFee);
-    if (claimFeeEvents.length === 0) {
-        return totalClaimedFees;
-    }
-
-    const fromBlockTime = claimFeeEvents[0].blockTime || 0;
-    const toBlockTime = claimFeeEvents[claimFeeEvents.length - 1].blockTime || 0;
-    const optimalTimeInterval = determineOptimalTimeInterval(fromBlockTime, toBlockTime);
-
-    const indexedClaimFeeTransactions = claimFeeEvents.map(event => ({
-        ...event,
-        index: determineIntervalIndex(fromBlockTime, optimalTimeInterval, event.blockTime || 0)
-    }));
-
-    try {
-        const historicalPrices = await getHistoricalPrice(lbPair.toString(), 'pair', optimalTimeInterval, fromBlockTime, toBlockTime);
-        const maxAvailableIndex = historicalPrices.data.items.length - 1;
-
-        for (const event of indexedClaimFeeTransactions) {
-            const priceIndex = Math.min(event.index, maxAvailableIndex);
-            const price = historicalPrices.data.items[priceIndex];
-            if (price) {
-                updateBalanceWithEvent(totalClaimedFees, event, new Decimal(price.value));
-            }
-        }
-    } catch (error) {
-        console.error('Error fetching historical prices:', error);
-        console.info('Using current JUP price:', tokenInfo.price);
-        // TODO here it is possible to use TWAP based on previous events with activeBin and tokenInfo.price as latest price
-        for (const event of claimFeeEvents) {
-            updateBalanceWithEvent(totalClaimedFees, event, new Decimal(tokenInfo.price));
-        }
-    }
-
-    return totalClaimedFees;
-}
-
-async function updateBalancesWithHistoricalPrices(blockTimesByMint: { [tokenYMint: string]: number[] },
-                                                  tokenInfo: TokenInfo) {
-    const results: { [tokenYMint: string]: { blockTime: number, price: Decimal }[] } = {};
-
-    for (const [mint, blockTimes] of Object.entries(blockTimesByMint)) {
-        if (blockTimes.length === 0) continue;
-
-        const fromBlockTime = blockTimes[0];
-        const toBlockTime = blockTimes[blockTimes.length - 1];
-        const optimalTimeInterval = determineOptimalTimeInterval(fromBlockTime, toBlockTime);
-
-        const indexedBlockTimes = blockTimes.map(blockTime => ({
-            blockTime,
-            index: determineIntervalIndex(fromBlockTime, optimalTimeInterval, blockTime)
-        }));
-
-        try {
-            const historicalPricesYinUSD = await getHistoricalPrice(
-                mint,
-                'token',
-                optimalTimeInterval,
-                fromBlockTime,
-                toBlockTime
-            );
-            const historicalPricesSOL = await getHistoricalPrice(
-                'So11111111111111111111111111111111111111112',
-                'token',
-                optimalTimeInterval,
-                fromBlockTime,
-                toBlockTime
-            );
-
-            const SOLPriceMap = new Map<number, number>(
-                historicalPricesSOL.data.items.map((item: HistoricalPriceItem) => [item.unixTime, item.value])
-            );
-
-            const historicalPricesYinSOL: HistoricalPriceItem[] = historicalPricesYinUSD.data.items.map((item: HistoricalPriceItem) => {
-                const SOLPrice = SOLPriceMap.get(item.unixTime);
-
-                if (SOLPrice !== undefined) {
-                    return {
-                        ...item,
-                        value: item.value/SOLPrice
-                    };
-                }
-                return item;
-            });
-
-            const maxAvailableIndex = historicalPricesYinSOL.length - 1;
-            const pricesForMint: { blockTime: number, price: Decimal }[] = [];
-
-            for (const indexed of indexedBlockTimes) {
-                const priceIndex = Math.min(indexed.index, maxAvailableIndex);
-                const price = historicalPricesYinSOL[priceIndex];
-
-                if (price) {
-                    pricesForMint.push({
-                        blockTime: indexed.blockTime,
-                        price: new Decimal(price.value)
-                    });
-                }
-            }
-
-            results[mint] = pricesForMint;
-
-        } catch (error) {
-            console.error(`Error fetching historical prices for mint ${mint}:`, error);
-            console.info('Using current JUP price:', tokenInfo.price);
-
-            // Fallback: use current price for all block times
-            results[mint] = blockTimes.map(blockTime => ({
-                blockTime,
-                price: new Decimal(tokenInfo.price)
-            }));
-        }
-    }
-
-    return results;
-}
-
-async function processPositionsWithPrices(positions: [string, PositionLiquidityData][]) {
-    const blockTimesByMint = getBlockTimesByTokenYMint(positions);
-
-    for (const [tokenYMintStr, blockTimes] of Object.entries(blockTimesByMint)) {
-        const samplePosition = positions.find(([_, pos]) => pos.tokenYMint.toString() === tokenYMintStr)?.[1];
-        if (!samplePosition) {
-            console.error(`No position found for mint ${tokenYMintStr}`);
-            continue;
-        }
-
-        const tokenInfo = await fetchTokenPrice(samplePosition.tokenXMint, samplePosition.tokenYMint);
-
-        const pricesByMint = await updateBalancesWithHistoricalPrices(
-            { [tokenYMintStr]: blockTimes },
-            tokenInfo
-        );
-
-        for (const { blockTime, price } of pricesByMint[tokenYMintStr]) {
-            const matchingPositions = positions.filter(([_, pos]) =>
-                pos.tokenYMint.toString() === tokenYMintStr
-            );
-
-            for (const [_, pos] of matchingPositions) {
-                const balances = [
-                    pos.totalDeposits,
-                    pos.totalWithdrawals,
-                    pos.totalUnclaimedFees,
-                    pos.totalClaimedFees,
-                    pos.totalCurrent
-                ];
-
-                balances.forEach(balanceInfo => {
-                    const matchingBalances = balanceInfo.balances.filter(
-                        b => b.blockTime === blockTime
-                    );
-                    matchingBalances.forEach(b => b.setTokenYSOLPrice(price));
-                });
-            }
-        }
-    }
 }

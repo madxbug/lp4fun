@@ -107,28 +107,14 @@ export interface EventInfo {
 export class BalanceInfo {
     tokenXBalance: Decimal;
     tokenYBalance: Decimal;
-    exchangeRate: Decimal;
-    totalValueInTokenY: Decimal;
-    totalValueInTokenX: Decimal;
-    tokenYSOLPrice: Decimal;
+    usdValue: Decimal;
     blockTime: number;
 
-    constructor(tokenXBalance: Decimal, tokenYBalance: Decimal, exchangeRate: Decimal, blockTime: number) {
+    constructor(tokenXBalance: Decimal, tokenYBalance: Decimal, usdValue: Decimal, blockTime: number) {
         this.tokenXBalance = tokenXBalance;
         this.tokenYBalance = tokenYBalance;
-        this.exchangeRate = exchangeRate;
+        this.usdValue = usdValue;
         this.blockTime = blockTime;
-        this.totalValueInTokenY = this.exchangeRate.mul(this.tokenXBalance).add(this.tokenYBalance);
-        this.totalValueInTokenX = this.exchangeRate.isZero() ? new Decimal(0) : this.tokenYBalance.div(this.exchangeRate).add(this.tokenXBalance);
-        this.tokenYSOLPrice = new Decimal(0);
-    }
-
-    setTokenYSOLPrice(price: Decimal): void {
-        this.tokenYSOLPrice = price;
-    }
-
-    getSOLValue(): Decimal{
-        return this.tokenYSOLPrice.mul(this.totalValueInTokenY);
     }
 
     static zero(): BalanceInfo {
@@ -151,51 +137,16 @@ export class PositionBalanceInfo {
         this.balances.push(balance);
     }
 
+    getTotalUSDValue(): Decimal {
+        return this.balances.reduce((sum, balance) => sum.add(balance.usdValue), new Decimal(0));
+    }
+
     getTotalTokenXBalance(): Decimal {
         return this.balances.reduce((sum, balance) => sum.add(balance.tokenXBalance), new Decimal(0));
     }
 
     getTotalTokenYBalance(): Decimal {
         return this.balances.reduce((sum, balance) => sum.add(balance.tokenYBalance), new Decimal(0));
-    }
-
-    getTotalValueInTokenX(): Decimal {
-        return this.balances.reduce((sum, balance) => sum.add(balance.totalValueInTokenX), new Decimal(0));
-    }
-
-    getTotalValueInTokenY(): Decimal {
-        return this.balances.reduce((sum, balance) => sum.add(balance.totalValueInTokenY), new Decimal(0));
-    }
-
-    getTotalValueIn(currency: string): Decimal {
-        if (currency == this.tokenXMint) {
-            return this.getTotalValueInTokenX();
-        }
-        if (currency == this.tokenYMint) {
-            return this.getTotalValueInTokenY();
-        }
-        return this.balances.reduce((sum, balance) => sum.add(balance.getSOLValue()), new Decimal(0));
-    }
-
-    getWeightedExchangeRate(): Decimal {
-        if (this.balances.length === 0) {
-            return new Decimal(0);
-        }
-
-        let totalValue = new Decimal(0);
-        let weightedSum = new Decimal(0);
-
-        for (const balance of this.balances) {
-            const value = balance.totalValueInTokenY;
-            totalValue = totalValue.add(value);
-            weightedSum = weightedSum.add(balance.exchangeRate.mul(value));
-        }
-
-        if (totalValue.isZero()) {
-            return new Decimal(0);
-        }
-
-        return weightedSum.div(totalValue);
     }
 }
 
