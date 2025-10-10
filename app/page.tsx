@@ -1,8 +1,10 @@
+// app/page.tsx
 'use client';
 
 import React, {useEffect, useRef, useState} from 'react';
 import {useRouter} from 'next/navigation';
 import {isValidSolanaAddress} from "@/app/utils/validation";
+import {detectAddressType} from "@/app/utils/addressDetection";
 import Link from 'next/link';
 
 interface WalletGroup {
@@ -14,6 +16,7 @@ interface WalletGroup {
 interface FormState {
     walletPubKey: string;
     error: string;
+    isDetecting: boolean;
 }
 
 interface GroupFormState {
@@ -24,7 +27,11 @@ interface GroupFormState {
 }
 
 const Home = () => {
-    const [formState, setFormState] = useState<FormState>({walletPubKey: '', error: ''});
+    const [formState, setFormState] = useState<FormState>({
+        walletPubKey: '',
+        error: '',
+        isDetecting: false
+    });
     const [history, setHistory] = useState<(string | WalletGroup)[]>([]);
     const [groups, setGroups] = useState<WalletGroup[]>([]);
     const [showGroupModal, setShowGroupModal] = useState(false);
@@ -45,33 +52,83 @@ const Home = () => {
 
         if (!walletPubKey) return;
 
-        const wallets = walletPubKey.split(',').map(w => w.trim());
-        const invalidWallets: string[] = [];
+        setFormState(prev => ({...prev, isDetecting: true, error: ''}));
 
-        for (const wallet of wallets) {
-            const isValid = await isValidSolanaAddress(wallet);
-            if (!isValid) {
-                invalidWallets.push(wallet);
+        try {
+            const addresses = walletPubKey.split(',').map(w => w.trim());
+            const invalidAddresses: string[] = [];
+
+            // First validate all addresses
+            for (const address of addresses) {
+                const isValid = await isValidSolanaAddress(address);
+                if (!isValid) {
+                    invalidAddresses.push(address);
+                }
             }
-        }
 
-        if (invalidWallets.length > 0) {
-            setFormState(prev => ({...prev, error: `Invalid wallet address(es): ${invalidWallets.join(', ')}`}));
-            return;
-        }
+            if (invalidAddresses.length > 0) {
+                setFormState(prev => ({
+                    ...prev,
+                    error: `Invalid address(es): ${invalidAddresses.join(', ')}`,
+                    isDetecting: false
+                }));
+                return;
+            }
 
-        const existingGroup = groups.find(b => b.wallets.join(',') === walletPubKey);
-        if (existingGroup) {
-            updateHistory(existingGroup);
-        } else {
-            updateHistory(walletPubKey);
-        }
+            // If single address, detect type and route accordingly
+            if (addresses.length === 1) {
+                const detection = await detectAddressType(addresses[0]);
 
-        router.push(`/wallet/${walletPubKey}`);
+                if (detection.type === 'invalid') {
+                    setFormState(prev => ({
+                        ...prev,
+                        error: 'Invalid Solana address',
+                        isDetecting: false
+                    }));
+                    return;
+                }
+
+                if (detection.type === 'token') {
+                    // Route to pools page for tokens
+                    updateHistory(walletPubKey);
+                    router.push(`/pools/${walletPubKey}`);
+                    return;
+                }
+
+                // Route to wallet page for wallets
+                const existingGroup = groups.find(b => b.wallets.join(',') === walletPubKey);
+                if (existingGroup) {
+                    updateHistory(existingGroup);
+                } else {
+                    updateHistory(walletPubKey);
+                }
+                router.push(`/wallet/${walletPubKey}`);
+                return;
+            }
+
+            // Multiple addresses - treat as wallets (could enhance this later)
+            const existingGroup = groups.find(b => b.wallets.join(',') === walletPubKey);
+            if (existingGroup) {
+                updateHistory(existingGroup);
+            } else {
+                updateHistory(walletPubKey);
+            }
+
+            router.push(`/wallet/${walletPubKey}`);
+        } catch (error) {
+            console.error('Error processing addresses:', error);
+            setFormState(prev => ({
+                ...prev,
+                error: 'Error processing addresses. Please try again.',
+                isDetecting: false
+            }));
+        } finally {
+            setFormState(prev => ({...prev, isDetecting: false}));
+        }
     };
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        setFormState({walletPubKey: e.target.value, error: ''});
+        setFormState({walletPubKey: e.target.value, error: '', isDetecting: false});
     };
 
     const updateHistory = (newItem: string | WalletGroup) => {
@@ -87,7 +144,7 @@ const Home = () => {
     };
 
     const clearInput = () => {
-        setFormState({walletPubKey: '', error: ''});
+        setFormState({walletPubKey: '', error: '', isDetecting: false});
         if (inputRef.current) {
             inputRef.current.value = '';
             inputRef.current.focus();
@@ -118,7 +175,6 @@ const Home = () => {
             return;
         }
 
-        // Check for existing group name (excluding the current group if updating)
         if (groups.some(g => g.name.toLowerCase() === name.trim().toLowerCase() && g.id !== id)) {
             setGroupFormState(prev => ({...prev, error: 'A group with this name already exists'}));
             return;
@@ -157,11 +213,11 @@ const Home = () => {
 
         updateHistory(newGroup);
         setShowGroupModal(false);
-        setFormState({walletPubKey: newGroup.wallets.join(','), error: ''});
+        setFormState({walletPubKey: newGroup.wallets.join(','), error: '', isDetecting: false});
     };
 
     const loadGroup = (group: WalletGroup) => {
-        setFormState({walletPubKey: group.wallets.join(','), error: ''});
+        setFormState({walletPubKey: group.wallets.join(','), error: '', isDetecting: false});
     };
 
     const showDropdown = !formState.walletPubKey && history.length > 0;
@@ -180,7 +236,6 @@ const Home = () => {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
                                   d="M3 4h6v6H3V4zM15 4h6v6h-6V4zM3 14h6v6H3v-6zM15 14h6v6h-6v-6z"/>
                         </svg>
-
                     </button>
                 </div>
 
@@ -192,15 +247,17 @@ const Home = () => {
                                 type="text"
                                 value={formState.walletPubKey}
                                 onChange={handleInputChange}
-                                placeholder="Solana wallet address(es) or domain(s) here"
+                                placeholder="Solana wallet or token address"
                                 className="input input-bordered w-full pr-12 pl-12"
                                 autoComplete="off"
+                                disabled={formState.isDetecting}
                                 style={{fontFamily: 'Open Sans, sans-serif'}}
                             />
                             <button
                                 type="button"
                                 onClick={clearInput}
                                 className="absolute left-2 top-1/2 -translate-y-1/2 btn btn-ghost btn-circle btn-sm"
+                                disabled={formState.isDetecting}
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none"
                                      viewBox="0 0 24 24"
@@ -212,13 +269,18 @@ const Home = () => {
                             <button
                                 type="submit"
                                 className="absolute right-2 top-1/2 -translate-y-1/2 btn btn-ghost btn-circle btn-sm"
+                                disabled={formState.isDetecting}
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none"
-                                     viewBox="0 0 24 24"
-                                     stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
-                                          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-                                </svg>
+                                {formState.isDetecting ? (
+                                    <span className="loading loading-spinner loading-sm"></span>
+                                ) : (
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none"
+                                         viewBox="0 0 24 24"
+                                         stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                                              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                                    </svg>
+                                )}
                             </button>
                         </div>
                     </form>
@@ -234,7 +296,7 @@ const Home = () => {
                                     key={`history-${index}`}
                                     onClick={() => {
                                         if (typeof item === 'string') {
-                                            setFormState({walletPubKey: item, error: ''});
+                                            setFormState({walletPubKey: item, error: '', isDetecting: false});
                                         } else {
                                             loadGroup(item);
                                         }
@@ -248,7 +310,8 @@ const Home = () => {
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
                                                       d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
                                             </svg>
-                                            {item.name}</>
+                                            {item.name}
+                                        </>
                                     )}
                                 </button>
                             ))}
@@ -286,7 +349,6 @@ const Home = () => {
                         </div>
                     </div>
                 )}
-
             </div>
             <footer className="fixed bottom-0 left-0 right-0 p-4">
                 <div className="container mx-auto flex justify-center items-center space-x-4">
