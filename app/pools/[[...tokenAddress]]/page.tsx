@@ -78,6 +78,7 @@ const PoolPage: React.FC = () => {
     const [sortKey, setSortKey] = useState<SortKey>('liquidity');
     const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
     const [hideZeroVolume, setHideZeroVolume] = useState(true);
+    const [hideLowLiquidity, setHideLowLiquidity] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
 
     useEffect(() => {
@@ -188,6 +189,10 @@ const PoolPage: React.FC = () => {
             filtered = filtered.filter(pool => pool.trade_volume_24h > 0);
         }
 
+        if (hideLowLiquidity) {
+            filtered = filtered.filter(pool => parseFloat(pool.liquidity) >= 1000);
+        }
+
         return [...filtered].sort((a, b) => {
             let aVal: number, bVal: number;
 
@@ -226,7 +231,7 @@ const PoolPage: React.FC = () => {
 
             return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
         });
-    }, [pools, sortKey, sortDirection, hideZeroVolume, searchQuery]);
+    }, [pools, sortKey, sortDirection, hideZeroVolume, hideLowLiquidity, searchQuery]);
 
     const handleSort = (key: SortKey) => {
         if (sortKey === key) {
@@ -291,24 +296,7 @@ const PoolPage: React.FC = () => {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-4 sm:gap-6">
-                        <div className="flex items-center gap-2">
-                            <span className="text-xs sm:text-sm text-base-content/70">
-                                {searchQuery ? 'Filtered / ' : ''}Pools:
-                            </span>
-                            <span className="text-lg sm:text-2xl font-bold">
-                                {searchQuery && (
-                                    <span className="text-primary">{sortedPools.length} / </span>
-                                )}
-                                {hideZeroVolume && !searchQuery ? sortedPools.length : pools.length}
-                                {hideZeroVolume && !searchQuery && pools.length !== sortedPools.length && (
-                                    <span className="text-xs sm:text-sm text-base-content/50 ml-1">
-                                        / {pools.length}
-                                    </span>
-                                )}
-                            </span>
-                        </div>
-
+                    <div className="flex items-center gap-3 sm:gap-4">
                         <label className="label cursor-pointer gap-2">
                             <input
                                 type="checkbox"
@@ -316,11 +304,173 @@ const PoolPage: React.FC = () => {
                                 checked={hideZeroVolume}
                                 onChange={(e) => setHideZeroVolume(e.target.checked)}
                             />
-                            <span className="label-text text-xs sm:text-sm">Hide 0-volume pools</span>
+                            <span className="label-text text-xs sm:text-sm whitespace-nowrap">Hide 0-volume</span>
+                        </label>
+
+                        <label className="label cursor-pointer gap-2">
+                            <input
+                                type="checkbox"
+                                className="toggle toggle-success toggle-xs sm:toggle-sm"
+                                checked={hideLowLiquidity}
+                                onChange={(e) => setHideLowLiquidity(e.target.checked)}
+                            />
+                            <span className="label-text text-xs sm:text-sm whitespace-nowrap">Hide low-liquidity</span>
                         </label>
                     </div>
                 </div>
             </div>
+
+            {/* Token Asset Data - Table View */}
+            {tokenAssets.get(tokenAddress) && (() => {
+                const asset = tokenAssets.get(tokenAddress)!;
+                interface Timeframe {
+                    label: string;
+                    mobileLabel: string;
+                    stats: NonNullable<typeof asset.stats5m>;
+                }
+
+                const rawTimeframes = [
+                    { label: "5m", mobileLabel: "5 Minutes", stats: asset.stats5m },
+                    { label: "1h", mobileLabel: "1 Hour", stats: asset.stats1h },
+                    { label: "6h", mobileLabel: "6 Hours", stats: asset.stats6h },
+                    { label: "24h", mobileLabel: "24 Hours", stats: asset.stats24h },
+                ];
+
+                // Filter out undefined stats and assert type
+                const timeframes: Timeframe[] = rawTimeframes.filter(
+                    (t): t is Timeframe => t.stats !== undefined
+                );
+
+                const SignPct = ({ v }: { v?: number }) => {
+                    const val = v ?? 0;
+                    const cls = val >= 0 ? "text-success" : "text-error";
+                    const s = `${val >= 0 ? "+" : ""}${val.toFixed(2)}%`;
+                    return <span className={`font-bold ${cls}`}>{s}</span>;
+                };
+
+                const BuySell = ({ buy, sell, className = "" }: { buy?: number; sell?: number; className?: string }) => (
+                    <div className={`font-bold text-xs ${className}`}>
+                        <span className="text-success">{formatCurrency(buy ?? 0)}</span>
+                        <span className="mx-1 text-base-content/40">/</span>
+                        <span className="text-error">{formatCurrency(sell ?? 0)}</span>
+                    </div>
+                );
+
+                return (
+                    <div className="bg-base-100 rounded-lg shadow-sm p-3 sm:p-4 mb-4">
+                        {/* Top Row: Price, Liquidity, MCap (FDV), Holders, Organic Score */}
+                        <div className="grid grid-cols-3 md:grid-cols-5 gap-3 sm:gap-4 mb-4 pb-3 border-b border-base-300">
+                            <div>
+                                <div className="text-xs text-base-content/50 mb-1">Price</div>
+                                <div className="font-bold text-base sm:text-lg">${prettifyNumber(asset.usdPrice)}</div>
+                            </div>
+                            <div>
+                                <div className="text-xs text-base-content/50 mb-1">Liquidity</div>
+                                <div className="font-bold text-base sm:text-lg">{formatCurrency(asset.liquidity)}</div>
+                            </div>
+                            <div>
+                                <div className="text-xs text-base-content/50 mb-1">MCap (FDV)</div>
+                                <div className="font-bold text-base sm:text-lg">
+                                    {formatCurrency(asset.mcap)}{" "}
+                                    <span className="text-xs text-base-content/50">({formatCurrency(asset.fdv)})</span>
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-xs text-base-content/50 mb-1">Holders</div>
+                                <div className="font-bold text-base sm:text-lg">{asset.holderCount.toLocaleString()}</div>
+                            </div>
+                            <div>
+                                <div className="text-xs text-base-content/50 mb-1">Organic</div>
+                                <div className="font-bold text-base sm:text-lg flex items-center gap-1">
+                                    {prettifyNumber(asset.organicScore)}
+                                    <span
+                                        className={`badge badge-xs ${
+                                            asset.organicScoreLabel === "high"
+                                                ? "badge-success"
+                                                : asset.organicScoreLabel === "medium"
+                                                    ? "badge-warning"
+                                                    : "badge-error"
+                                        }`}
+                                    >
+              {asset.organicScoreLabel}
+            </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Stats Table - Desktop */}
+                        <div className="hidden md:block overflow-x-auto">
+                            <table className="table table-sm w-full">
+                                <thead>
+                                <tr className="text-xs">
+                                    <th className="font-bold">Time</th>
+                                    <th className="font-bold text-right">Price</th>
+                                    <th className="font-bold text-right">Holders</th>
+                                    <th className="font-bold text-right">Liq</th>
+                                    <th className="font-bold text-right">Vol</th>
+                                    <th className="font-bold text-right">Buy / Sell</th>
+                                    <th className="font-bold text-right">Organic Buy / Sell</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                {timeframes.map(({ label, stats }) => (
+                                    <tr key={label} className="text-xs hover:bg-base-200">
+                                        <td className="font-bold">{label}</td>
+                                        <td className="text-right"><SignPct v={stats.priceChange} /></td>
+                                        <td className="text-right"><SignPct v={stats.holderChange} /></td>
+                                        <td className="text-right"><SignPct v={stats.liquidityChange} /></td>
+                                        <td className="text-right"><SignPct v={stats.volumeChange} /></td>
+                                        <td className="text-right">
+                                            <BuySell buy={stats.buyVolume} sell={stats.sellVolume} />
+                                        </td>
+                                        <td className="text-right">
+                                            <BuySell buy={stats.buyOrganicVolume} sell={stats.sellOrganicVolume} />
+                                        </td>
+                                    </tr>
+                                ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* Stats Cards - Mobile */}
+                        <div className="md:hidden space-y-3">
+                            {timeframes.map(({ mobileLabel, stats, label }) => (
+                                <div key={label} className="bg-base-200 rounded-lg p-3">
+                                    <div className="font-bold text-sm mb-2">{mobileLabel}</div>
+                                    <div className="grid grid-cols-2 gap-2 text-xs">
+                                        <div>
+                                            <span className="text-base-content/60">Price:</span>{" "}
+                                            <span className="ml-1"><SignPct v={stats.priceChange} /></span>
+                                        </div>
+                                        <div>
+                                            <span className="text-base-content/60">Holders:</span>{" "}
+                                            <span className="ml-1"><SignPct v={stats.holderChange} /></span>
+                                        </div>
+                                        <div>
+                                            <span className="text-base-content/60">Liq:</span>{" "}
+                                            <span className="ml-1"><SignPct v={stats.liquidityChange} /></span>
+                                        </div>
+                                        <div>
+                                            <span className="text-base-content/60">Vol:</span>{" "}
+                                            <span className="ml-1"><SignPct v={stats.volumeChange} /></span>
+                                        </div>
+
+                                        <div className="col-span-2">
+                                            <div className="text-base-content/60 mb-1">Buy / Sell:</div>
+                                            <BuySell buy={stats.buyVolume} sell={stats.sellVolume} className="text-sm" />
+                                        </div>
+
+                                        <div className="col-span-2">
+                                            <div className="text-base-content/60 mb-1">Organic Buy / Sell:</div>
+                                            <BuySell buy={stats.buyOrganicVolume} sell={stats.sellOrganicVolume} className="text-sm" />
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            })()}
 
             {pools.length === 0 ? (
                 <div className="bg-base-100 rounded-lg p-8 text-center">

@@ -26,19 +26,25 @@ interface TokenAsset {
     symbol: string;
     icon: string;
     decimals: number;
+    twitter?: string;
+    website?: string;
     dev: string;
     circSupply: number;
     totalSupply: number;
     tokenProgram: string;
-    mintAuthority: string;
+    launchpad?: string;
     firstPool: {
         id: string;
         createdAt: string;
     };
+    graduatedPool?: string;
+    graduatedAt?: string;
     holderCount: number;
     audit: {
+        mintAuthorityDisabled?: boolean;
         freezeAuthorityDisabled: boolean;
         topHoldersPercentage: number;
+        devMigrations?: number;
         highSingleOwnership: boolean;
     };
     organicScore: number;
@@ -50,12 +56,10 @@ interface TokenAsset {
     usdPrice: number;
     priceBlockId: number;
     liquidity: number;
-    stats1h: {
-        holderChange: number;
-    };
-    stats6h: {
+    stats5m?: {
         priceChange: number;
         holderChange: number;
+        liquidityChange: number;
         volumeChange: number;
         buyVolume: number;
         sellVolume: number;
@@ -64,6 +68,38 @@ interface TokenAsset {
         numBuys: number;
         numSells: number;
         numTraders: number;
+        numOrganicBuyers: number;
+        numNetBuyers: number;
+    };
+    stats1h: {
+        priceChange: number;
+        holderChange: number;
+        liquidityChange: number;
+        volumeChange: number;
+        buyVolume: number;
+        sellVolume: number;
+        buyOrganicVolume: number;
+        sellOrganicVolume: number;
+        numBuys: number;
+        numSells: number;
+        numTraders: number;
+        numOrganicBuyers: number;
+        numNetBuyers: number;
+    };
+    stats6h: {
+        priceChange: number;
+        holderChange: number;
+        liquidityChange: number;
+        volumeChange: number;
+        buyVolume: number;
+        sellVolume: number;
+        buyOrganicVolume: number;
+        sellOrganicVolume: number;
+        numBuys: number;
+        numSells: number;
+        numTraders: number;
+        numOrganicBuyers: number;
+        numNetBuyers: number;
     };
     stats24h: {
         priceChange: number;
@@ -77,7 +113,11 @@ interface TokenAsset {
         numBuys: number;
         numSells: number;
         numTraders: number;
+        numOrganicBuyers: number;
+        numNetBuyers: number;
     };
+    ctLikes?: number;
+    smartCtLikes?: number;
     updatedAt: string;
 }
 
