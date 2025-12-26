@@ -21,7 +21,7 @@
     "bn.js": "^5.2.2",
     "daisyui": "^5.0.43",
     "date-fns": "^4.1.0",
-    "next": "15.3.3",
+    "next": "15.3.8",
     "react": "^19",
     "react-dom": "^19",
     "react-hook-form": "^7.57.0",
