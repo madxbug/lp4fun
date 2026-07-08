@@ -8,6 +8,12 @@ import {getPositionsInfo} from "@/app/utils/dlmm";
 import Decimal from "decimal.js";
 import {formatPubKey} from "@/app/utils/formatters";
 import {getNoRetryConnection} from "@/app/utils/cachedConnection";
+import {fetchPositionsPnl, PositionPnl} from "@/app/utils/meteoraDataAPI";
+
+const pnlNum = (v: string | number | null | undefined): number => {
+    const n = typeof v === 'string' ? parseFloat(v) : (v ?? 0);
+    return Number.isFinite(n) ? n : 0;
+};
 
 
 type MetricsResult = {
@@ -68,6 +74,7 @@ const getEventDescription = (eventInfo: Partial<EventInfo> | undefined, tokenXSy
 
 const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
     const [positionsData, setPositionsData] = useState<{ [key: string]: PositionLiquidityData }>({});
+    const [pnlMap, setPnlMap] = useState<Map<string, PositionPnl>>(new Map());
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [showDetails, setShowDetails] = useState<{ [key: string]: boolean }>({});
@@ -93,6 +100,36 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
     useEffect(() => {
         fetchTransactions();
     }, [fetchTransactions]);
+
+    // Server-computed PnL (USD + SOL) per position from the Meteora data API
+    useEffect(() => {
+        let cancelled = false;
+        const entries = Object.values(positionsData);
+        if (entries.length === 0) return;
+
+        const uniquePoolUsers = new Map<string, { pool: string; owner: string }>();
+        entries.forEach(p => {
+            const pool = p.lbPair.toString();
+            const owner = p.owner.toString();
+            uniquePoolUsers.set(`${pool}_${owner}`, {pool, owner});
+        });
+
+        (async () => {
+            const results = await Promise.all(
+                Array.from(uniquePoolUsers.values()).map(({pool, owner}) =>
+                    fetchPositionsPnl(pool, owner, 'all')
+                )
+            );
+            if (cancelled) return;
+            const map = new Map<string, PositionPnl>();
+            results.flat().forEach(p => map.set(p.positionAddress, p));
+            setPnlMap(map);
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [positionsData]);
 
 
     const calculateMetrics = useCallback((positions: { [key: string]: PositionLiquidityData }) => {
@@ -301,6 +338,8 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                             return prettifyNumber(roi);
                                         };
 
+                                        const apiPnl = pnlMap.get(pubKey);
+
                                         return (
                                             <div key={pubKey}
                                                  className="relative p-6 border-b border-base-200 last:border-b-0">
@@ -310,6 +349,12 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                 <h3 className="text-lg font-semibold mb-6 text-base-content">
                                                     <div
                                                         className="flex flex-col sm:flex-row sm:items-center space-y-2 sm:space-y-0 sm:space-x-4">
+                                                        {apiPnl?.isClosed && (
+                                                            <span className="badge badge-neutral badge-sm">closed</span>
+                                                        )}
+                                                        {apiPnl && !apiPnl.isClosed && apiPnl.isOutOfRange && (
+                                                            <span className="badge badge-warning badge-sm whitespace-nowrap">out of range</span>
+                                                        )}
                                                         <div className="flex items-center space-x-2">
                                                             <span className="text-base-content/70">Position:</span>
                                                             <a
@@ -356,7 +401,7 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                         </div>
                                                     </div>
                                                     <div className="divider my-2 opacity-10"></div>
-                                                    <div className="grid grid-cols-3 gap-4">
+                                                    <div className={`grid ${apiPnl ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'} gap-4`}>
                                                         <div className="space-y-1">
                                                             <p className="text-sm text-base-content/70">Net Profit</p>
                                                             <p className={`text-xl font-medium ${parseFloat(getNetProfit()) >= 0 ? 'text-success' : 'text-error'}`}>
@@ -369,6 +414,17 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                                 {getROI()}%
                                                             </p>
                                                         </div>
+                                                        {apiPnl && (
+                                                            <div className="space-y-1">
+                                                                <p className="text-sm text-base-content/70">PnL in SOL</p>
+                                                                <p className={`text-xl font-medium ${pnlNum(apiPnl.pnlSol) >= 0 ? 'text-success' : 'text-error'}`}>
+                                                                    {pnlNum(apiPnl.pnlSol) >= 0 ? '+' : ''}{prettifyNumber(pnlNum(apiPnl.pnlSol))} SOL
+                                                                </p>
+                                                                <p className="text-xs text-base-content/50">
+                                                                    {(pnlNum(apiPnl.pnlSolPctChange) * 100).toFixed(2)}% · via Meteora API
+                                                                </p>
+                                                            </div>
+                                                        )}
                                                         <div className="space-y-1">
                                                             <p className="text-sm text-base-content/70">Active for</p>
                                                             <p className="text-xl font-medium">{getDaysActive()}</p>
