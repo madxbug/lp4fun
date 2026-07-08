@@ -8,12 +8,20 @@ import {formatDistanceToNow} from 'date-fns';
 import {PoolData, PoolInfo, PositionData} from "@/app/types";
 import {formatCurrency, prettifyNumber} from "@/app/utils/numberFormatting";
 import {calculateLiquidityDistribution} from "@/app/utils/liquidity";
+import {PortfolioOpenPool} from "@/app/utils/meteoraDataAPI";
+import PriceSparkline from "@/app/components/PriceSparkline";
 
 interface TableComponentProps {
     dataMap: Map<string, PoolData>;
     selectedPositions: Set<string>;
     onSelectionChange: (positions: Set<string>) => void;
+    portfolioPools?: Map<string, PortfolioOpenPool>;
 }
+
+const toNum = (v: string | number | null | undefined): number => {
+    const n = typeof v === 'string' ? parseFloat(v) : (v ?? 0);
+    return Number.isFinite(n) ? n : 0;
+};
 
 interface GroupedPool {
     key: string;
@@ -29,7 +37,7 @@ interface TokenGroup {
     }[];
 }
 
-const TableComponent: React.FC<TableComponentProps> = ({ dataMap, selectedPositions, onSelectionChange }) => {
+const TableComponent: React.FC<TableComponentProps> = ({ dataMap, selectedPositions, onSelectionChange, portfolioPools }) => {
     const [poolInfoMap, setPoolInfoMap] = useState<Map<string, PoolInfo>>(new Map());
     const [positionsWithDates, setPositionsWithDates] = useState<Map<string, PositionData[]>>(new Map());
     const [groupedPools, setGroupedPools] = useState<TokenGroup[]>([]);
@@ -215,6 +223,10 @@ const TableComponent: React.FC<TableComponentProps> = ({ dataMap, selectedPositi
                                             const dailyYield = poolInfo?.liquidity && poolInfo?.fees_24h
                                                 ? (poolInfo.fees_24h / parseFloat(poolInfo.liquidity)) * 100
                                                 : 0;
+                                            const portfolioPool = portfolioPools?.get(key);
+                                            const outOfRangeCount = portfolioPool?.positionsOutOfRange?.length ?? 0;
+                                            const poolPnl = portfolioPool ? toNum(portfolioPool.pnl) : null;
+                                            const poolPnlSol = portfolioPool ? toNum(portfolioPool.pnlSol) : null;
 
                                             return (
                                                 <div key={`${key}-header`} className="mb-4">
@@ -240,13 +252,22 @@ const TableComponent: React.FC<TableComponentProps> = ({ dataMap, selectedPositi
                                                             {poolInfo?.name || key}
                                                         </span>
                                                             </a>
-                                                            <div className="text-sm font-medium text-gray-600">
-                                                                {value.nameY} per {value.nameX} {prettifyNumber(poolInfo?.current_price || 0)}
+                                                            <div className="flex items-center gap-3">
+                                                                <PriceSparkline poolAddress={key}/>
+                                                                <div className="text-sm font-medium text-gray-600">
+                                                                    {value.nameY} per {value.nameX} {prettifyNumber(poolInfo?.current_price || 0)}
+                                                                </div>
+                                                                {outOfRangeCount > 0 && (
+                                                                    <span className="badge badge-warning badge-sm whitespace-nowrap"
+                                                                          title={`${outOfRangeCount} position(s) out of range`}>
+                                                                        {outOfRangeCount} out of range
+                                                                    </span>
+                                                                )}
                                                             </div>
                                                         </div>
 
                                                         {/* Key metrics - always visible */}
-                                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                                                        <div className={`grid grid-cols-2 ${poolPnl !== null ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-4 mb-4`}>
                                                             <div>
                                                                 <div className="text-xs text-gray-500">Liquidity</div>
                                                                 <div
@@ -268,6 +289,17 @@ const TableComponent: React.FC<TableComponentProps> = ({ dataMap, selectedPositi
                                                                     className="font-semibold">{prettifyNumber(dailyYield, true)}%
                                                                 </div>
                                                             </div>
+                                                            {poolPnl !== null && (
+                                                                <div>
+                                                                    <div className="text-xs text-gray-500">PnL</div>
+                                                                    <div className={`font-semibold ${poolPnl >= 0 ? 'text-success' : 'text-error'}`}>
+                                                                        {poolPnl >= 0 ? '+' : '-'}{formatCurrency(Math.abs(poolPnl))}
+                                                                        <div className="text-xs opacity-70 font-normal">
+                                                                            {poolPnlSol !== null && poolPnlSol >= 0 ? '+' : ''}{prettifyNumber(poolPnlSol ?? 0)} SOL
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            )}
                                                         </div>
 
                                                         <div

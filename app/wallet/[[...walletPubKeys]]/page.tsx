@@ -4,6 +4,8 @@
 import {usePathname, useSearchParams} from 'next/navigation';
 import React, {useEffect, useState} from 'react';
 import TableComponent from '@/app/wallet/[[...walletPubKeys]]/TableComponent';
+import PortfolioOverview from '@/app/wallet/[[...walletPubKeys]]/PortfolioOverview';
+import {fetchPortfolioOpen, PortfolioOpen, PortfolioOpenPool} from '@/app/utils/meteoraDataAPI';
 import DLMM, {LbPosition} from '@meteora-ag/dlmm';
 import {PublicKey} from '@solana/web3.js';
 import {formatTokenBalance} from "@/app/utils/solana";
@@ -64,6 +66,7 @@ const WalletPage: React.FC = () => {
     const pathname = usePathname();
     const searchParams = useSearchParams();
     const [walletsData, setWalletsData] = useState<WalletData[]>([]);
+    const [portfolios, setPortfolios] = useState<Map<string, PortfolioOpen | null>>(new Map());
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [selectedPositions, setSelectedPositions] = useState<Set<string>>(new Set());
@@ -93,12 +96,16 @@ const WalletPage: React.FC = () => {
             try {
                 setIsLoading(true);
                 const walletsDataPromises = wallets.map(async (wallet) => {
-                    const dataMap = await createDataMap(wallet);
-                    return { wallet, dataMap };
+                    const [dataMap, portfolio] = await Promise.all([
+                        createDataMap(wallet),
+                        fetchPortfolioOpen(wallet),
+                    ]);
+                    return { wallet, dataMap, portfolio };
                 });
 
                 const resolvedWalletsData = await Promise.all(walletsDataPromises);
-                setWalletsData(resolvedWalletsData);
+                setWalletsData(resolvedWalletsData.map(({wallet, dataMap}) => ({wallet, dataMap})));
+                setPortfolios(new Map(resolvedWalletsData.map(({wallet, portfolio}) => [wallet, portfolio])));
 
                 const allPositionKeys = new Set<string>();
                 resolvedWalletsData.forEach(({ dataMap }) => {
@@ -189,11 +196,18 @@ const WalletPage: React.FC = () => {
                                 </div>
                             </a>
                         </div>
+                        <PortfolioOverview
+                            wallet={wallet}
+                            portfolio={portfolios.get(wallet) ?? null}
+                        />
                         {dataMap.size > 0 ? (
                             <TableComponent
                                 dataMap={dataMap}
                                 selectedPositions={selectedPositions}
                                 onSelectionChange={handleSelectionChange}
+                                portfolioPools={new Map<string, PortfolioOpenPool>(
+                                    (portfolios.get(wallet)?.pools ?? []).map(p => [p.poolAddress, p])
+                                )}
                             />
                         ) : (
                             <div className="text-center text-base-content/70 italic">
