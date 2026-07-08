@@ -20,9 +20,12 @@ interface TimeWindowData {
     '24h': number;
 }
 
+type PoolProtocol = 'DLMM' | 'DAMM v2';
+
 interface PoolInfo {
     address: string;
     name: string;
+    protocol: PoolProtocol;
     mint_x: string;
     mint_y: string;
     token_x_amount: number;
@@ -43,10 +46,21 @@ interface PoolInfo {
 
 const EMPTY_WINDOW: TimeWindowData = {'30m': 0, '1h': 0, '2h': 0, '4h': 0, '12h': 0, '24h': 0};
 
-// Maps a pool object from the Meteora DLMM data API (dlmm.datapi.meteora.ag) to PoolInfo
-const mapApiPool = (raw: any): PoolInfo => ({
+const PROTOCOL_API_BASE: Record<PoolProtocol, string> = {
+    'DLMM': 'https://dlmm.datapi.meteora.ag',
+    'DAMM v2': 'https://damm-v2.datapi.meteora.ag',
+};
+
+const poolAppUrl = (pool: PoolInfo): string =>
+    pool.protocol === 'DLMM'
+        ? `https://app.meteora.ag/dlmm/${pool.address}`
+        : `https://app.meteora.ag/dammv2/${pool.address}`;
+
+// Maps a pool object from the Meteora data APIs (DLMM and DAMM v2 share this shape) to PoolInfo
+const mapApiPool = (raw: any, protocol: PoolProtocol): PoolInfo => ({
     address: raw.address,
     name: raw.name,
+    protocol,
     mint_x: raw.token_x?.address ?? '',
     mint_y: raw.token_y?.address ?? '',
     token_x_amount: raw.token_x_amount ?? 0,
@@ -64,6 +78,28 @@ const mapApiPool = (raw: any): PoolInfo => ({
     volume: raw.volume ?? EMPTY_WINDOW,
     is_verified: Boolean(raw.token_x?.is_verified && raw.token_y?.is_verified),
 });
+
+const fetchProtocolPools = async (protocol: PoolProtocol, tokenAddress: string): Promise<PoolInfo[]> => {
+    const pools: PoolInfo[] = [];
+    const limit = 100;
+    let page = 1;
+
+    while (page <= 10) {
+        const response = await fetch(
+            `${PROTOCOL_API_BASE[protocol]}/pools?query=${tokenAddress}&page=${page}&page_size=${limit}`
+        );
+        if (!response.ok) {
+            throw new Error(`Failed to fetch ${protocol} pools`);
+        }
+        const data = await response.json();
+        const pagePools = Array.isArray(data.data) ? data.data : [];
+        if (pagePools.length === 0) break;
+        pools.push(...pagePools.map((raw: any) => mapApiPool(raw, protocol)));
+        if (pagePools.length < limit || page >= (data.pages ?? page)) break;
+        page++;
+    }
+    return pools;
+};
 
 function getDailyYield(pool: PoolInfo): number {
     const liquidity = parseFloat(pool.liquidity);
@@ -86,6 +122,7 @@ const PoolPage: React.FC = () => {
     const [hideZeroVolume, setHideZeroVolume] = useState(true);
     const [hideLowLiquidity, setHideLowLiquidity] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
+    const [protocolFilter, setProtocolFilter] = useState<'all' | PoolProtocol>('all');
 
     useEffect(() => {
         if (params.tokenAddress) {
@@ -113,33 +150,14 @@ const PoolPage: React.FC = () => {
                 if (cancelled) return;
                 setTokenInfo(metadata);
 
-                const allPools: PoolInfo[] = [];
-                let page = 1;
-                let hasMore = true;
-                const limit = 100;
-
-                while (hasMore && !cancelled) {
-                    const response = await fetch(
-                        `https://dlmm.datapi.meteora.ag/pools?query=${tokenAddress}&page=${page}&page_size=${limit}`
-                    );
-
-                    if (!response.ok) {
-                        throw new Error('Failed to fetch pools');
-                    }
-
-                    const data = await response.json();
-                    const pagePools = Array.isArray(data.data) ? data.data : [];
-
-                    if (pagePools.length > 0) {
-                        allPools.push(...pagePools.map(mapApiPool));
-                        hasMore = pagePools.length === limit && page < (data.pages ?? page);
-                        page++;
-                    } else {
-                        hasMore = false;
-                    }
-
-                    if (page > 10) break;
-                }
+                const [dlmmPools, dammPools] = await Promise.all([
+                    fetchProtocolPools('DLMM', tokenAddress),
+                    fetchProtocolPools('DAMM v2', tokenAddress).catch(err => {
+                        console.error('DAMM v2 pools unavailable:', err);
+                        return [] as PoolInfo[];
+                    }),
+                ]);
+                const allPools = [...dlmmPools, ...dammPools];
 
                 if (cancelled) return;
                 setPools(allPools);
@@ -185,9 +203,13 @@ const PoolPage: React.FC = () => {
     const sortedPools = useMemo(() => {
         let filtered = pools;
 
+        if (protocolFilter !== 'all') {
+            filtered = filtered.filter(pool => pool.protocol === protocolFilter);
+        }
+
         if (searchQuery.trim()) {
             const query = searchQuery.toLowerCase().trim();
-            filtered = pools.filter(pool =>
+            filtered = filtered.filter(pool =>
                 pool.name.toLowerCase().includes(query)
             );
         }
@@ -238,7 +260,7 @@ const PoolPage: React.FC = () => {
 
             return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
         });
-    }, [pools, sortKey, sortDirection, hideZeroVolume, hideLowLiquidity, searchQuery]);
+    }, [pools, sortKey, sortDirection, hideZeroVolume, hideLowLiquidity, searchQuery, protocolFilter]);
 
     const handleSort = (key: SortKey) => {
         if (sortKey === key) {
@@ -303,7 +325,18 @@ const PoolPage: React.FC = () => {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-3 sm:gap-4">
+                    <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
+                        <div className="join">
+                            {(['all', 'DLMM', 'DAMM v2'] as const).map(p => (
+                                <button
+                                    key={p}
+                                    className={`join-item btn btn-xs sm:btn-sm ${protocolFilter === p ? 'btn-primary' : 'btn-ghost'}`}
+                                    onClick={() => setProtocolFilter(p)}
+                                >
+                                    {p === 'all' ? 'All' : p}
+                                </button>
+                            ))}
+                        </div>
                         <label className="label cursor-pointer gap-2">
                             <input
                                 type="checkbox"
@@ -481,7 +514,7 @@ const PoolPage: React.FC = () => {
 
             {pools.length === 0 ? (
                 <div className="bg-base-100 rounded-lg p-8 text-center">
-                    <p className="text-base-content/70">No DLMM pools found for this token</p>
+                    <p className="text-base-content/70">No Meteora pools found for this token</p>
                     <a
                         href="https://app.meteora.ag/dlmm"
                         target="_blank"
@@ -598,7 +631,7 @@ const PoolPage: React.FC = () => {
 
                                                     <div className="flex-1">
                                                         <a
-                                                            href={`https://app.meteora.ag/dlmm/${pool.address}`}
+                                                            href={poolAppUrl(pool)}
                                                             target="_blank"
                                                             rel="noopener noreferrer"
                                                             className="font-semibold hover:text-primary transition-colors flex items-center gap-2"
@@ -618,7 +651,10 @@ const PoolPage: React.FC = () => {
                                                             )}
                                                         </a>
                                                         <div className="text-xs text-base-content/60 mt-1">
-                                                            Bin: {pool.bin_step} | Fee: {pool.base_fee_percentage}%
+                                                            {pool.protocol === 'DLMM' ? `Bin: ${pool.bin_step} | ` : ''}Fee: {pool.base_fee_percentage}%
+                                                            {pool.protocol !== 'DLMM' && (
+                                                                <span className="badge badge-ghost badge-xs ml-1">DAMM v2</span>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 </div>
@@ -736,7 +772,7 @@ const PoolPage: React.FC = () => {
                                             </div>
                                             <div className="flex-1">
                                                 <a
-                                                    href={`https://app.meteora.ag/dlmm/${pool.address}`}
+                                                    href={poolAppUrl(pool)}
                                                     target="_blank"
                                                     rel="noopener noreferrer"
                                                     className="font-bold text-base hover:text-primary transition-colors flex items-center gap-2"
@@ -756,7 +792,10 @@ const PoolPage: React.FC = () => {
                                                     )}
                                                 </a>
                                                 <div className="text-xs text-base-content/60">
-                                                    Bin: {pool.bin_step} | Fee: {pool.base_fee_percentage}%
+                                                    {pool.protocol === 'DLMM' ? `Bin: ${pool.bin_step} | ` : ''}Fee: {pool.base_fee_percentage}%
+                                                            {pool.protocol !== 'DLMM' && (
+                                                                <span className="badge badge-ghost badge-xs ml-1">DAMM v2</span>
+                                                            )}
                                                 </div>
                                             </div>
                                         </div>
