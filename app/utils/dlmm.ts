@@ -8,8 +8,7 @@ import {blockTime2Date, date2BlockTime, fetchTokenDecimals, formatDecimalTokenBa
 import Decimal from "decimal.js";
 import {getTokenMetadata} from "@/app/utils/tokenMetadata";
 import {
-    fetchMeteoraPositionMeta,
-    fetchPositionOperations,
+    fetchPositionData,
     MeteoraClaimFee,
     MeteoraDeposit,
     MeteoraWithdraw
@@ -184,7 +183,7 @@ export async function getPositionsInfo(
 
     const processPosition = async (positionPubKey: string) => {
         try {
-            const meta = await fetchMeteoraPositionMeta(positionPubKey);
+            const {meta, deposits, withdrawals, claimFees} = await fetchPositionData(positionPubKey);
             if (!meta?.pair_address || !meta?.owner) {
                 throw new Error(`Missing pair_address or owner for position ${positionPubKey}`);
             }
@@ -200,12 +199,6 @@ export async function getPositionsInfo(
                 fetchTokenDecimals(connection, tokenXMint),
                 fetchTokenDecimals(connection, tokenYMint),
             ]);
-
-            const {
-                deposits,
-                withdrawals,
-                claimFees
-            } = await fetchPositionOperations(positionPubKey, tokenXDecimals, tokenYDecimals);
 
             const operations: EventInfo[] = buildEventsFromMeteoraOps(
                 deposits,

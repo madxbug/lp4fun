@@ -2,12 +2,12 @@
 import React from 'react';
 
 interface TrendData {
-    min_30: number;
-    hour_1: number;
-    hour_2: number;
-    hour_4: number;
-    hour_12: number;
-    hour_24: number;
+    '30m': number;
+    '1h': number;
+    '2h': number;
+    '4h': number;
+    '12h': number;
+    '24h': number;
 }
 
 interface CompactTrendProps {
@@ -23,42 +23,42 @@ interface NormalizedPeriod {
 
 export const CompactTrendBars: React.FC<CompactTrendProps> = ({ data }) => {
     // Normalize everything to 30-minute units
-    const baseline30min = data.hour_24 / 48; // 24 hours = 48 thirty-minute periods
+    const baseline30min = data['24h'] / 48; // 24 hours = 48 thirty-minute periods
 
     const periods: NormalizedPeriod[] = [
         {
             label: "24h",
-            per30min: data.hour_24 / 48,
+            per30min: data['24h'] / 48,
             baseline: baseline30min,
             isAbove: true // baseline, neutral
         },
         {
             label: "12h",
-            per30min: data.hour_12 / 24,
+            per30min: data['12h'] / 24,
             baseline: baseline30min,
             get isAbove() { return this.per30min >= this.baseline; }
         },
         {
             label: "4h",
-            per30min: data.hour_4 / 8,
+            per30min: data['4h'] / 8,
             baseline: baseline30min,
             get isAbove() { return this.per30min >= this.baseline; }
         },
         {
             label: "2h",
-            per30min: data.hour_2 / 4,
+            per30min: data['2h'] / 4,
             baseline: baseline30min,
             get isAbove() { return this.per30min >= this.baseline; }
         },
         {
             label: "1h",
-            per30min: data.hour_1 / 2,
+            per30min: data['1h'] / 2,
             baseline: baseline30min,
             get isAbove() { return this.per30min >= this.baseline; }
         },
         {
             label: "30m",
-            per30min: data.min_30,
+            per30min: data['30m'],
             baseline: baseline30min,
             get isAbove() { return this.per30min >= this.baseline; }
         }

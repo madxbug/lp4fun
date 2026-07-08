@@ -41,20 +41,33 @@ const TableComponent: React.FC<TableComponentProps> = ({ dataMap, selectedPositi
     }, [selectedPositions]);
 
     useEffect(() => {
-        const fetchPoolInfo = async (pubkey: string, xDecimals: number, yDecimals: number) => {
+        const fetchPoolInfo = async (pubkey: string, xDecimals: number, yDecimals: number): Promise<PoolInfo | null> => {
             try {
-                const response = await fetch(`https://dlmm-api.meteora.ag/pair/${pubkey}`);
+                const response = await fetch(`https://dlmm.datapi.meteora.ag/pools/${pubkey}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
                 const data = await response.json();
                 return {
-                    ...data,
+                    name: data.name,
+                    current_price: data.current_price ?? 0,
+                    liquidity: String(data.tvl ?? 0),
+                    fees_24h: data.fees?.['24h'] ?? 0,
+                    apr: data.apr ?? 0,
+                    apy: data.apy ?? 0,
+                    bin_step: data.pool_config?.bin_step ?? 0,
+                    base_fee_percentage: String(data.pool_config?.base_fee_pct ?? 0),
+                    max_fee_percentage: String(data.pool_config?.max_fee_pct ?? 0),
+                    protocol_fee_percentage: String(data.pool_config?.protocol_fee_pct ?? 0),
+                    trade_volume_24h: data.volume?.['24h'] ?? 0,
+                    cumulative_trade_volume: String(data.cumulative_metrics?.volume ?? 0),
+                    cumulative_fee_volume: String(data.cumulative_metrics?.fees ?? 0),
                     tokenXDecimal: xDecimals,
                     tokenYDecimal: yDecimals,
                     liquidityDistribution: calculateLiquidityDistribution(
-                        data.reserve_x_amount,
-                        data.reserve_y_amount,
-                        data.current_price,
-                        xDecimals,
-                        yDecimals
+                        data.token_x_amount,
+                        data.token_y_amount,
+                        data.current_price
                     ),
                 };
             } catch (error) {

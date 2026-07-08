@@ -11,31 +11,13 @@ import {CompactTrendBars} from "@/app/components/Trend";
 import {calculateLiquidityDistribution} from '@/app/utils/liquidity';
 import {fetchTokenAssets, TokenAsset} from "@/app/utils/jup";
 
-interface PoolFees {
-    min_30: number;
-    hour_1: number;
-    hour_2: number;
-    hour_4: number;
-    hour_12: number;
-    hour_24: number;
-}
-
-interface PoolVolume {
-    min_30: number;
-    hour_1: number;
-    hour_2: number;
-    hour_4: number;
-    hour_12: number;
-    hour_24: number;
-}
-
-interface PoolFeeTVLRatio {
-    min_30: number;
-    hour_1: number;
-    hour_2: number;
-    hour_4: number;
-    hour_12: number;
-    hour_24: number;
+interface TimeWindowData {
+    '30m': number;
+    '1h': number;
+    '2h': number;
+    '4h': number;
+    '12h': number;
+    '24h': number;
 }
 
 interface PoolInfo {
@@ -43,8 +25,8 @@ interface PoolInfo {
     name: string;
     mint_x: string;
     mint_y: string;
-    reserve_x_amount: number;
-    reserve_y_amount: number;
+    token_x_amount: number;
+    token_y_amount: number;
     bin_step: number;
     base_fee_percentage: string;
     liquidity: string;
@@ -53,11 +35,35 @@ interface PoolInfo {
     current_price: number;
     apr: number;
     apy: number;
-    fees: PoolFees;
-    fee_tvl_ratio: PoolFeeTVLRatio;
-    volume: PoolVolume;
+    fees: TimeWindowData;
+    fee_tvl_ratio: TimeWindowData;
+    volume: TimeWindowData;
     is_verified: boolean;
 }
+
+const EMPTY_WINDOW: TimeWindowData = {'30m': 0, '1h': 0, '2h': 0, '4h': 0, '12h': 0, '24h': 0};
+
+// Maps a pool object from the Meteora DLMM data API (dlmm.datapi.meteora.ag) to PoolInfo
+const mapApiPool = (raw: any): PoolInfo => ({
+    address: raw.address,
+    name: raw.name,
+    mint_x: raw.token_x?.address ?? '',
+    mint_y: raw.token_y?.address ?? '',
+    token_x_amount: raw.token_x_amount ?? 0,
+    token_y_amount: raw.token_y_amount ?? 0,
+    bin_step: raw.pool_config?.bin_step ?? 0,
+    base_fee_percentage: String(raw.pool_config?.base_fee_pct ?? 0),
+    liquidity: String(raw.tvl ?? 0),
+    fees_24h: raw.fees?.['24h'] ?? 0,
+    trade_volume_24h: raw.volume?.['24h'] ?? 0,
+    current_price: raw.current_price ?? 0,
+    apr: raw.apr ?? 0,
+    apy: raw.apy ?? 0,
+    fees: raw.fees ?? EMPTY_WINDOW,
+    fee_tvl_ratio: raw.fee_tvl_ratio ?? EMPTY_WINDOW,
+    volume: raw.volume ?? EMPTY_WINDOW,
+    is_verified: Boolean(raw.token_x?.is_verified && raw.token_y?.is_verified),
+});
 
 function getDailyYield(pool: PoolInfo): number {
     const liquidity = parseFloat(pool.liquidity);
@@ -114,7 +120,7 @@ const PoolPage: React.FC = () => {
 
                 while (hasMore && !cancelled) {
                     const response = await fetch(
-                        `https://dlmm-api.meteora.ag/pair/all_with_pagination?include_token_mints=${tokenAddress}&limit=${limit}&page=${page}`
+                        `https://dlmm.datapi.meteora.ag/pools?query=${tokenAddress}&page=${page}&page_size=${limit}`
                     );
 
                     if (!response.ok) {
@@ -122,10 +128,11 @@ const PoolPage: React.FC = () => {
                     }
 
                     const data = await response.json();
+                    const pagePools = Array.isArray(data.data) ? data.data : [];
 
-                    if (data.pairs && data.pairs.length > 0) {
-                        allPools.push(...data.pairs);
-                        hasMore = data.pairs.length === limit;
+                    if (pagePools.length > 0) {
+                        allPools.push(...pagePools.map(mapApiPool));
+                        hasMore = pagePools.length === limit && page < (data.pages ?? page);
                         page++;
                     } else {
                         hasMore = false;
@@ -549,15 +556,10 @@ const PoolPage: React.FC = () => {
                                     const assetX = tokenAssets.get(pool.mint_x);
                                     const assetY = tokenAssets.get(pool.mint_y);
 
-                                    const decimalsX = assetX?.decimals || 9;
-                                    const decimalsY = assetY?.decimals || 9;
-
                                     const {percentX, percentY} = calculateLiquidityDistribution(
-                                        pool.reserve_x_amount,
-                                        pool.reserve_y_amount,
-                                        pool.current_price,
-                                        decimalsX,
-                                        decimalsY
+                                        pool.token_x_amount,
+                                        pool.token_y_amount,
+                                        pool.current_price
                                     );
 
                                     const tokens = pool.name.split('-').map(t => t.trim());
@@ -616,7 +618,7 @@ const PoolPage: React.FC = () => {
                                                             )}
                                                         </a>
                                                         <div className="text-xs text-base-content/60 mt-1">
-                                                            Bin: {pool.bin_step} | Fee: {pool.base_fee_percentage}
+                                                            Bin: {pool.bin_step} | Fee: {pool.base_fee_percentage}%
                                                         </div>
                                                     </div>
                                                 </div>
@@ -696,15 +698,10 @@ const PoolPage: React.FC = () => {
                                 const assetX = tokenAssets.get(pool.mint_x);
                                 const assetY = tokenAssets.get(pool.mint_y);
 
-                                const decimalsX = assetX?.decimals || 9;
-                                const decimalsY = assetY?.decimals || 9;
-
                                 const {percentX, percentY} = calculateLiquidityDistribution(
-                                    pool.reserve_x_amount,
-                                    pool.reserve_y_amount,
-                                    pool.current_price,
-                                    decimalsX,
-                                    decimalsY
+                                    pool.token_x_amount,
+                                    pool.token_y_amount,
+                                    pool.current_price
                                 );
 
                                 const tokens = pool.name.split('-').map(t => t.trim());
@@ -759,7 +756,7 @@ const PoolPage: React.FC = () => {
                                                     )}
                                                 </a>
                                                 <div className="text-xs text-base-content/60">
-                                                    Bin: {pool.bin_step} | Fee: {pool.base_fee_percentage}
+                                                    Bin: {pool.bin_step} | Fee: {pool.base_fee_percentage}%
                                                 </div>
                                             </div>
                                         </div>
