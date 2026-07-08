@@ -5,6 +5,12 @@ import React, {useEffect, useRef, useState} from 'react';
 import {useRouter} from 'next/navigation';
 import {isValidSolanaAddress} from "@/app/utils/validation";
 import {detectAddressType} from "@/app/utils/addressDetection";
+import {
+    clearCustomRpcEndpoint,
+    getCustomRpcEndpoint,
+    isValidRpcUrl,
+    setCustomRpcEndpoint
+} from "@/app/utils/rpcSettings";
 import Link from 'next/link';
 
 interface WalletGroup {
@@ -36,6 +42,12 @@ const Home = () => {
     const [groups, setGroups] = useState<WalletGroup[]>([]);
     const [showGroupModal, setShowGroupModal] = useState(false);
     const [groupFormState, setGroupFormState] = useState<GroupFormState>({id: '', name: '', wallets: '', error: ''});
+    const [showRpcModal, setShowRpcModal] = useState(false);
+    const [rpcFormState, setRpcFormState] = useState<{ url: string; error: string; hasCustom: boolean }>({
+        url: '',
+        error: '',
+        hasCustom: false
+    });
     const router = useRouter();
     const inputRef = useRef<HTMLInputElement>(null);
 
@@ -157,6 +169,33 @@ const Home = () => {
         setShowGroupModal(true);
     };
 
+    const openRpcModal = () => {
+        const current = getCustomRpcEndpoint();
+        setRpcFormState({url: current ?? '', error: '', hasCustom: current !== null});
+        setShowRpcModal(true);
+    };
+
+    const saveRpcEndpoint = () => {
+        const url = rpcFormState.url.trim();
+        if (!url) {
+            clearCustomRpcEndpoint();
+            setShowRpcModal(false);
+            return;
+        }
+        if (!isValidRpcUrl(url)) {
+            setRpcFormState(prev => ({...prev, error: 'Enter a valid http(s) RPC URL'}));
+            return;
+        }
+        setCustomRpcEndpoint(url);
+        setShowRpcModal(false);
+    };
+
+    const resetRpcEndpoint = () => {
+        clearCustomRpcEndpoint();
+        setRpcFormState({url: '', error: '', hasCustom: false});
+        setShowRpcModal(false);
+    };
+
     const handleGroupInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const {name, value} = e.target;
         setGroupFormState(prev => ({...prev, [name]: value, error: ''}));
@@ -226,6 +265,19 @@ const Home = () => {
         <>
             <div className="w-full max-w-md mx-auto relative">
                 <div className="mb-2 flex justify-end">
+                    <button
+                        onClick={openRpcModal}
+                        className="btn btn-ghost btn-circle btn-sm"
+                        title="RPC Settings"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24"
+                             stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                        </svg>
+                    </button>
                     <button
                         onClick={openGroupModal}
                         className="btn btn-ghost btn-circle btn-sm"
@@ -318,6 +370,39 @@ const Home = () => {
                         </div>
                     )}
                 </div>
+
+                {showRpcModal && (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                        <div className="bg-base-100 rounded-lg p-6 w-full max-w-md">
+                            <h3 className="font-bold text-lg mb-2">RPC Settings</h3>
+                            <p className="text-sm text-base-content/70 mb-4">
+                                Use your own Solana RPC endpoint instead of the built-in one. It must allow browser
+                                (CORS) requests and support <code>getProgramAccounts</code>. Stored only in this
+                                browser. Leave empty to use the default.
+                            </p>
+                            <input
+                                type="text"
+                                placeholder="https://your-rpc-endpoint.example.com"
+                                className="input input-bordered w-full mb-4"
+                                value={rpcFormState.url}
+                                onChange={(e) => setRpcFormState(prev => ({...prev, url: e.target.value, error: ''}))}
+                                autoComplete="off"
+                            />
+                            <div className="flex justify-end space-x-2">
+                                {rpcFormState.hasCustom && (
+                                    <button onClick={resetRpcEndpoint} className="btn btn-ghost text-error">
+                                        Reset to default
+                                    </button>
+                                )}
+                                <button onClick={() => setShowRpcModal(false)} className="btn btn-ghost">Cancel</button>
+                                <button onClick={saveRpcEndpoint} className="btn btn-accent">Save</button>
+                            </div>
+                            {rpcFormState.error && (
+                                <p className="text-error mt-2 text-sm">{rpcFormState.error}</p>
+                            )}
+                        </div>
+                    </div>
+                )}
 
                 {showGroupModal && (
                     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">

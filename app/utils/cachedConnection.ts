@@ -5,6 +5,7 @@ import {
 } from '@solana/web3.js';
 
 import {config} from '@/app/utils/config';
+import {getRpcEndpoint} from '@/app/utils/rpcSettings';
 
 const CACHE_EXPIRY = 180 * 1000; // 3 minute
 
@@ -146,20 +147,26 @@ export function createCachedConnection(
     });
 }
 
-// Singleton instances
+// Singleton instances, recreated if the effective RPC endpoint changes
 let defaultConnectionInstance: Connection | null = null;
+let defaultConnectionEndpoint: string | null = null;
 let noRetryConnectionInstance: Connection | null = null;
+let noRetryConnectionEndpoint: string | null = null;
 
 export function getDefaultConnection(): Connection {
-    if (!defaultConnectionInstance) {
-        defaultConnectionInstance = createCachedConnection(config.RPC_ENDPOINT, false);
+    const endpoint = getRpcEndpoint();
+    if (!defaultConnectionInstance || defaultConnectionEndpoint !== endpoint) {
+        defaultConnectionInstance = createCachedConnection(endpoint, false);
+        defaultConnectionEndpoint = endpoint;
     }
     return defaultConnectionInstance;
 }
 
 export function getNoRetryConnection(): Connection {
-    if (!noRetryConnectionInstance) {
-        noRetryConnectionInstance = createCachedConnection(config.RPC_ENDPOINT, true);
+    const endpoint = getRpcEndpoint();
+    if (!noRetryConnectionInstance || noRetryConnectionEndpoint !== endpoint) {
+        noRetryConnectionInstance = createCachedConnection(endpoint, true);
+        noRetryConnectionEndpoint = endpoint;
     }
     return noRetryConnectionInstance;
 }
