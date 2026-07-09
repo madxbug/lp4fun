@@ -28,19 +28,16 @@ const num = (v: string | number | null | undefined): number => {
     return Number.isFinite(n) ? n : 0;
 };
 
-const PCT_TITLE = 'PnL as % of net cost basis (deposits minus withdrawals). ' +
-    'Can look extreme for wallets that recycle the same capital through many positions.';
-
-const PnlValue: React.FC<{ usd: number; sol?: number; pct?: number }> = ({usd, sol, pct}) => (
+const PnlValue: React.FC<{ usd: number; sol?: number }> = ({usd, sol}) => (
     <div className={`font-semibold ${usd >= 0 ? 'text-success' : 'text-error'}`}
          title={`${usd >= 0 ? '+' : '-'}$${Math.abs(usd).toFixed(4)} USD`}>
         {usd >= 0 ? '+' : '-'}{formatCurrency(Math.abs(usd))}
         <span className="text-[10px] opacity-60 font-normal ml-0.5">USD</span>
-        {pct !== undefined && Number.isFinite(pct) && (
-            <span className="text-xs opacity-70" title={PCT_TITLE}> ({(pct * 100).toFixed(2)}%)</span>
-        )}
         {sol !== undefined && (
-            <div className="text-xs opacity-70 font-normal">{sol >= 0 ? '+' : ''}{prettifyNumber(sol)} SOL</div>
+            <div className="text-xs opacity-70 font-normal"
+                 title="The same PnL measured in SOL: every deposit, withdrawal, and fee is valued in SOL at the time it happened. Shows whether LPing beat simply holding SOL.">
+                {sol >= 0 ? '+' : ''}{prettifyNumber(sol)} SOL
+            </div>
         )}
     </div>
 );
@@ -123,7 +120,6 @@ const PortfolioOverview: React.FC<PortfolioOverviewProps> = ({wallet, portfolio}
                         <PnlValue
                             usd={num(openTotals?.pnl)}
                             sol={num(openTotals?.pnlSol)}
-                            pct={num(openTotals?.pnlPctChange)}
                         />
                     </div>
                     <div>
@@ -136,7 +132,6 @@ const PortfolioOverview: React.FC<PortfolioOverviewProps> = ({wallet, portfolio}
                                 <PnlValue
                                     usd={num(totals.totalPnlUsd)}
                                     sol={num(totals.totalPnlSol)}
-                                    pct={num(totals.totalPnlPctChange)}
                                 />
                                 <div className="text-xs opacity-50 mt-1">
                                     {totals.totalClosedPositions.toLocaleString()} closed positions
@@ -237,8 +232,7 @@ const PortfolioOverview: React.FC<PortfolioOverviewProps> = ({wallet, portfolio}
                                                 <td className="text-right whitespace-nowrap">{formatCurrency(num(pool.totalWithdrawal))}</td>
                                                 <td className="text-right whitespace-nowrap">{formatCurrency(num(pool.totalFee))}</td>
                                                 <td className="text-right whitespace-nowrap">
-                                                    <PnlValue usd={num(pool.pnlUsd)} sol={num(pool.pnlSol)}
-                                                              pct={num(pool.pnlPctChange)}/>
+                                                    <PnlValue usd={num(pool.pnlUsd)} sol={num(pool.pnlSol)}/>
                                                 </td>
                                                 <td className="text-right whitespace-nowrap opacity-70">
                                                     {pool.lastClosedAt

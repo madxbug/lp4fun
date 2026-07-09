@@ -421,7 +421,7 @@ const PositionStatus: React.FC<PositionStatusProps> = ({ positionPubKeys }) => {
                                                                     {pnlNum(apiPnl.pnlSol) >= 0 ? '+' : ''}{prettifyNumber(pnlNum(apiPnl.pnlSol))} SOL
                                                                 </p>
                                                                 <p className="text-xs text-base-content/50">
-                                                                    {(pnlNum(apiPnl.pnlSolPctChange) * 100).toFixed(2)}% · via Meteora API
+                                                                    via Meteora API
                                                                 </p>
                                                             </div>
                                                         )}
