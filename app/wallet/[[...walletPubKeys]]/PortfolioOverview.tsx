@@ -28,11 +28,16 @@ const num = (v: string | number | null | undefined): number => {
     return Number.isFinite(n) ? n : 0;
 };
 
+const PCT_TITLE = 'PnL as % of net cost basis (deposits minus withdrawals). ' +
+    'Can look extreme for wallets that recycle the same capital through many positions.';
+
 const PnlValue: React.FC<{ usd: number; sol?: number; pct?: number }> = ({usd, sol, pct}) => (
-    <div className={`font-semibold ${usd >= 0 ? 'text-success' : 'text-error'}`}>
+    <div className={`font-semibold ${usd >= 0 ? 'text-success' : 'text-error'}`}
+         title={`${usd >= 0 ? '+' : '-'}$${Math.abs(usd).toFixed(4)} USD`}>
         {usd >= 0 ? '+' : '-'}{formatCurrency(Math.abs(usd))}
+        <span className="text-[10px] opacity-60 font-normal ml-0.5">USD</span>
         {pct !== undefined && Number.isFinite(pct) && (
-            <span className="text-xs opacity-70"> ({(pct * 100).toFixed(2)}%)</span>
+            <span className="text-xs opacity-70" title={PCT_TITLE}> ({(pct * 100).toFixed(2)}%)</span>
         )}
         {sol !== undefined && (
             <div className="text-xs opacity-70 font-normal">{sol >= 0 ? '+' : ''}{prettifyNumber(sol)} SOL</div>
@@ -122,7 +127,10 @@ const PortfolioOverview: React.FC<PortfolioOverviewProps> = ({wallet, portfolio}
                         />
                     </div>
                     <div>
-                        <div className="text-xs text-base-content/60 mb-1">All-time PnL</div>
+                        <div className="text-xs text-base-content/60 mb-1 cursor-help"
+                             title="Sums flows through Meteora LP position accounts only (deposits, withdrawals, claimed fees). Excludes swap slippage, transaction fees, and rent paid outside the positions.">
+                            All-time PnL ⓘ
+                        </div>
                         {totals ? (
                             <>
                                 <PnlValue
