@@ -15,20 +15,40 @@ interface WalletGroup {
     wallets: string[];
 }
 
-type SortKey = 'usd' | 'sol';
+type SortKey = 'usd' | 'sol' | 'roi';
+
+const nextSortKey: Record<SortKey, SortKey> = {usd: 'sol', sol: 'roi', roi: 'usd'};
+
+// Dust deposits make percentages meaningless; ROI ranking sinks wallets below this.
+const ROI_MIN_DEPOSIT_USD = 1000;
+
+const roiSortValue = (roiPct: number | null | undefined, deposits: number | undefined): number =>
+    roiPct != null && (deposits ?? 0) >= ROI_MIN_DEPOSIT_USD ? roiPct : -Infinity;
 
 const num = (v: string | number | null | undefined): number => {
     const n = typeof v === 'string' ? parseFloat(v) : (v ?? 0);
     return Number.isFinite(n) ? n : 0;
 };
 
-const PnlCell: React.FC<{ usd: number; sol: number; positions?: number }> = ({usd, sol, positions}) => (
+const PnlCell: React.FC<{
+    usd: number;
+    sol: number;
+    positions?: number;
+    roiPct?: number | null;
+    deposits?: number;
+}> = ({usd, sol, positions, roiPct, deposits}) => (
     <div className={`font-semibold ${usd >= 0 ? 'text-success' : 'text-error'}`}>
         {usd >= 0 ? '+' : '-'}{formatCurrency(Math.abs(usd))}
         <span className="text-[10px] opacity-60 font-normal ml-0.5">USD</span>
         <div className="text-xs opacity-70 font-normal">
             {sol >= 0 ? '+' : ''}{prettifyNumber(sol)} SOL
         </div>
+        {roiPct != null && (deposits ?? 0) > 0 && (
+            <div className="text-[10px] opacity-50 font-normal"
+                 title="Realized PnL relative to gross deposits in this period. Re-deposited capital counts every time, so high-frequency wallets understate.">
+                {roiPct >= 0 ? '+' : ''}{roiPct.toFixed(1)}% on {formatCurrency(deposits!)}
+            </div>
+        )}
         {positions !== undefined && (
             <div className="text-[10px] opacity-50 font-normal">
                 {positions.toLocaleString()} position{positions === 1 ? '' : 's'} closed
@@ -77,6 +97,8 @@ interface GlobalWallet {
     pnlUsd: number;
     pnlSol: number;
     positions: number;
+    deposits?: number;
+    roiPct?: number | null;
 }
 
 interface GlobalPayload {
@@ -128,8 +150,11 @@ const GlobalBoard: React.FC = () => {
     const payload = payloads[windowKey];
     const wallets = useMemo(() => {
         if (!payload) return [];
-        return [...payload.wallets].sort((a, b) =>
-            sortKey === 'usd' ? b.pnlUsd - a.pnlUsd : b.pnlSol - a.pnlSol);
+        return [...payload.wallets].sort((a, b) => {
+            if (sortKey === 'sol') return b.pnlSol - a.pnlSol;
+            if (sortKey === 'roi') return roiSortValue(b.roiPct, b.deposits) - roiSortValue(a.roiPct, a.deposits);
+            return b.pnlUsd - a.pnlUsd;
+        });
     }, [payload, sortKey]);
 
     return (
@@ -203,7 +228,7 @@ const GlobalBoard: React.FC = () => {
                                 <th>Wallet</th>
                                 <th className="text-right">
                                     <PnlSortHeader label="Realized PnL" sortKey={sortKey}
-                                                   onToggle={() => setSortKey(k => k === 'usd' ? 'sol' : 'usd')}/>
+                                                   onToggle={() => setSortKey(k => nextSortKey[k])}/>
                                 </th>
                             </tr>
                             </thead>
@@ -222,7 +247,8 @@ const GlobalBoard: React.FC = () => {
                                         </Link>
                                     </td>
                                     <td className="text-right whitespace-nowrap">
-                                        <PnlCell usd={entry.pnlUsd} sol={entry.pnlSol} positions={entry.positions}/>
+                                        <PnlCell usd={entry.pnlUsd} sol={entry.pnlSol} positions={entry.positions}
+                                                 roiPct={entry.roiPct} deposits={entry.deposits}/>
                                     </td>
                                 </tr>
                             ))}
@@ -230,9 +256,10 @@ const GlobalBoard: React.FC = () => {
                         </table>
                     </div>
                     <div className="text-xs text-base-content/50 mt-3">
-                        Wallets are discovered from open positions in the top DLMM pools by 24h fees and TVL,
-                        then ranked by realized PnL (closed positions) from Meteora data. Wallets that fully
-                        exited before the last scan are not discovered.
+                        Wallets are discovered from open positions in top DLMM pools (by 24h fees, by fee/TVL
+                        concentration, and by TVL), prioritized by pool fees per LP, then ranked by realized
+                        PnL (closed positions) from Meteora data. Wallets that fully exited before the last
+                        scan are not discovered.
                     </div>
                 </div>
             )}
@@ -247,8 +274,16 @@ interface LeaderboardEntry {
     pnlUsd: number;
     pnlSol: number;
     closedPositions: number;
+    deposits: number;
+    roiPct: number | null;
     isManual: boolean;
 }
+
+// totalPnlPctChange is in percent units; derive gross deposits from it.
+const allTimeRoi = (pnlUsd: number, pctChange: number): { deposits: number; roiPct: number | null } => ({
+    deposits: pctChange !== 0 ? Math.abs(pnlUsd / (pctChange / 100)) : 0,
+    roiPct: pctChange !== 0 ? pctChange : null,
+});
 
 const MANUAL_WALLETS_KEY = 'leaderboardWallets';
 const FETCH_CHUNK_SIZE = 8;
@@ -310,14 +345,19 @@ const MyBoard: React.FC = () => {
                 const isManual = manualSet.has(wallet);
                 if (!total) {
                     if (!isManual) hidden++;
-                    else result.push({wallet, pnlUsd: 0, pnlSol: 0, closedPositions: 0, isManual});
+                    else result.push({
+                        wallet, pnlUsd: 0, pnlSol: 0, closedPositions: 0,
+                        deposits: 0, roiPct: null, isManual,
+                    });
                     return;
                 }
+                const pnlUsd = num(total.totalPnlUsd);
                 const entry: LeaderboardEntry = {
                     wallet,
-                    pnlUsd: num(total.totalPnlUsd),
+                    pnlUsd,
                     pnlSol: num(total.totalPnlSol),
                     closedPositions: total.totalClosedPositions ?? 0,
+                    ...allTimeRoi(pnlUsd, num(total.totalPnlPctChange)),
                     isManual,
                 };
                 // History can contain token mints and wallets that never LP'd — hide those
@@ -376,11 +416,13 @@ const MyBoard: React.FC = () => {
         if (!manual.includes(wallet)) {
             saveManualWallets([...manual, wallet]);
         }
+        const pnlUsd = num(total?.totalPnlUsd);
         setEntries(prev => [...prev, {
             wallet,
-            pnlUsd: num(total?.totalPnlUsd),
+            pnlUsd,
             pnlSol: num(total?.totalPnlSol),
             closedPositions: total?.totalClosedPositions ?? 0,
+            ...allTimeRoi(pnlUsd, num(total?.totalPnlPctChange)),
             isManual: true,
         }]);
         setAddForm({value: '', error: '', isAdding: false});
@@ -392,7 +434,11 @@ const MyBoard: React.FC = () => {
     };
 
     const sorted = useMemo(() =>
-            [...entries].sort((a, b) => sortKey === 'usd' ? b.pnlUsd - a.pnlUsd : b.pnlSol - a.pnlSol),
+            [...entries].sort((a, b) => {
+                if (sortKey === 'sol') return b.pnlSol - a.pnlSol;
+                if (sortKey === 'roi') return roiSortValue(b.roiPct, b.deposits) - roiSortValue(a.roiPct, a.deposits);
+                return b.pnlUsd - a.pnlUsd;
+            }),
         [entries, sortKey]);
 
     return (
@@ -460,7 +506,7 @@ const MyBoard: React.FC = () => {
                                 <th>Wallet</th>
                                 <th className="text-right">
                                     <PnlSortHeader label="All-time PnL" sortKey={sortKey}
-                                                   onToggle={() => setSortKey(k => k === 'usd' ? 'sol' : 'usd')}/>
+                                                   onToggle={() => setSortKey(k => nextSortKey[k])}/>
                                 </th>
                                 <th className="w-8"></th>
                             </tr>
@@ -481,7 +527,8 @@ const MyBoard: React.FC = () => {
                                     </td>
                                     <td className="text-right whitespace-nowrap">
                                         <PnlCell usd={entry.pnlUsd} sol={entry.pnlSol}
-                                                 positions={entry.closedPositions}/>
+                                                 positions={entry.closedPositions}
+                                                 roiPct={entry.roiPct} deposits={entry.deposits}/>
                                     </td>
                                     <td>
                                         {entry.isManual && (
