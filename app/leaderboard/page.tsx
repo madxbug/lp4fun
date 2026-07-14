@@ -22,13 +22,18 @@ const num = (v: string | number | null | undefined): number => {
     return Number.isFinite(n) ? n : 0;
 };
 
-const PnlCell: React.FC<{ usd: number; sol: number }> = ({usd, sol}) => (
+const PnlCell: React.FC<{ usd: number; sol: number; positions?: number }> = ({usd, sol, positions}) => (
     <div className={`font-semibold ${usd >= 0 ? 'text-success' : 'text-error'}`}>
         {usd >= 0 ? '+' : '-'}{formatCurrency(Math.abs(usd))}
         <span className="text-[10px] opacity-60 font-normal ml-0.5">USD</span>
         <div className="text-xs opacity-70 font-normal">
             {sol >= 0 ? '+' : ''}{prettifyNumber(sol)} SOL
         </div>
+        {positions !== undefined && (
+            <div className="text-[10px] opacity-50 font-normal">
+                {positions.toLocaleString()} position{positions === 1 ? '' : 's'} closed
+            </div>
+        )}
     </div>
 );
 
@@ -39,17 +44,20 @@ const rankBadge = (rank: number): string => {
     return `${rank}`;
 };
 
-const SortHeader: React.FC<{
-    active: boolean;
+// Column header that toggles ranking between USD and SOL.
+const PnlSortHeader: React.FC<{
     label: string;
-    onClick: () => void;
-}> = ({active, label, onClick}) => (
+    sortKey: SortKey;
+    onToggle: () => void;
+}> = ({label, sortKey, onToggle}) => (
     <button
-        onClick={onClick}
-        className={`inline-flex items-center gap-1 hover:text-base-content ${active ? 'text-base-content' : ''}`}
+        onClick={onToggle}
+        className="inline-flex items-center gap-1 text-base-content hover:opacity-70"
+        title="Rank by USD or by SOL"
     >
         {label}
-        {active && <span className="text-[10px]">▼</span>}
+        <span className="badge badge-ghost badge-xs uppercase">{sortKey}</span>
+        <span className="text-[10px]">▼</span>
     </button>
 );
 
@@ -86,7 +94,7 @@ interface GlobalPayload {
 }
 
 const GlobalBoard: React.FC = () => {
-    const [windowKey, setWindowKey] = useState<WindowKey>('7d');
+    const [windowKey, setWindowKey] = useState<WindowKey>('1d');
     const [payloads, setPayloads] = useState<Partial<Record<WindowKey, GlobalPayload>>>({});
     const [loadingWindow, setLoadingWindow] = useState<WindowKey | null>(null);
     const [error, setError] = useState('');
@@ -194,15 +202,8 @@ const GlobalBoard: React.FC = () => {
                                 <th className="w-12">#</th>
                                 <th>Wallet</th>
                                 <th className="text-right">
-                                    <SortHeader active={sortKey === 'usd'} label="Realized PnL"
-                                                onClick={() => setSortKey('usd')}/>
-                                </th>
-                                <th className="text-right">
-                                    <SortHeader active={sortKey === 'sol'} label="PnL in SOL"
-                                                onClick={() => setSortKey('sol')}/>
-                                </th>
-                                <th className="text-right">
-                                    {windowKey === 'all' ? 'Closed Positions' : 'Positions Closed'}
+                                    <PnlSortHeader label="Realized PnL" sortKey={sortKey}
+                                                   onToggle={() => setSortKey(k => k === 'usd' ? 'sol' : 'usd')}/>
                                 </th>
                             </tr>
                             </thead>
@@ -213,19 +214,16 @@ const GlobalBoard: React.FC = () => {
                                     <td>
                                         <Link
                                             href={`/wallet/${entry.wallet}`}
-                                            className="font-mono hover:underline"
+                                            className="font-mono text-xs sm:text-sm hover:underline"
                                             title={entry.wallet}
                                         >
-                                            {formatPubKey(entry.wallet)}
+                                            <span className="lg:hidden">{formatPubKey(entry.wallet)}</span>
+                                            <span className="hidden lg:inline">{entry.wallet}</span>
                                         </Link>
                                     </td>
                                     <td className="text-right whitespace-nowrap">
-                                        <PnlCell usd={entry.pnlUsd} sol={entry.pnlSol}/>
+                                        <PnlCell usd={entry.pnlUsd} sol={entry.pnlSol} positions={entry.positions}/>
                                     </td>
-                                    <td className={`text-right whitespace-nowrap ${entry.pnlSol >= 0 ? 'text-success' : 'text-error'}`}>
-                                        {entry.pnlSol >= 0 ? '+' : ''}{prettifyNumber(entry.pnlSol)}
-                                    </td>
-                                    <td className="text-right">{entry.positions.toLocaleString()}</td>
                                 </tr>
                             ))}
                             </tbody>
@@ -461,14 +459,9 @@ const MyBoard: React.FC = () => {
                                 <th className="w-12">#</th>
                                 <th>Wallet</th>
                                 <th className="text-right">
-                                    <SortHeader active={sortKey === 'usd'} label="All-time PnL"
-                                                onClick={() => setSortKey('usd')}/>
+                                    <PnlSortHeader label="All-time PnL" sortKey={sortKey}
+                                                   onToggle={() => setSortKey(k => k === 'usd' ? 'sol' : 'usd')}/>
                                 </th>
-                                <th className="text-right">
-                                    <SortHeader active={sortKey === 'sol'} label="PnL in SOL"
-                                                onClick={() => setSortKey('sol')}/>
-                                </th>
-                                <th className="text-right">Closed Positions</th>
                                 <th className="w-8"></th>
                             </tr>
                             </thead>
@@ -479,19 +472,17 @@ const MyBoard: React.FC = () => {
                                     <td>
                                         <Link
                                             href={`/wallet/${entry.wallet}`}
-                                            className="font-mono hover:underline"
+                                            className="font-mono text-xs sm:text-sm hover:underline"
                                             title={entry.wallet}
                                         >
-                                            {formatPubKey(entry.wallet)}
+                                            <span className="lg:hidden">{formatPubKey(entry.wallet)}</span>
+                                            <span className="hidden lg:inline">{entry.wallet}</span>
                                         </Link>
                                     </td>
                                     <td className="text-right whitespace-nowrap">
-                                        <PnlCell usd={entry.pnlUsd} sol={entry.pnlSol}/>
+                                        <PnlCell usd={entry.pnlUsd} sol={entry.pnlSol}
+                                                 positions={entry.closedPositions}/>
                                     </td>
-                                    <td className={`text-right whitespace-nowrap ${entry.pnlSol >= 0 ? 'text-success' : 'text-error'}`}>
-                                        {entry.pnlSol >= 0 ? '+' : ''}{prettifyNumber(entry.pnlSol)}
-                                    </td>
-                                    <td className="text-right">{entry.closedPositions.toLocaleString()}</td>
                                     <td>
                                         {entry.isManual && (
                                             <button
